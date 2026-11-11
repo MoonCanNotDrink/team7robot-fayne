@@ -2,7 +2,7 @@
 
 工程使用球队批准的 Sheet1/Sheet2 V1。每队固定一名门将、一名后卫、一名中场和一名前锋，由球队协调器在每拍决定攻防和追球人。模型名为 `tdpV1Match`。25 项战术、模型与指标测试全部通过，两个控制周期各完成 20 场完整比赛。[整场成绩与复现耗时](../generated/v1_results.md) · [V1 来源](../../evidence/tactics-v1/source/receipt.json) · [函数测试](../../evidence/tactics-v1/unit-02/receipt.json) · [模型测试与接线](v1_model_interface.md)
 
-Sheet2!A27 记载了原 AI 范围。2026-11-06，用户向本项目转述导师已明确允许此项目使用 AI 编码。V1 使用 AI 编写战术函数、模型接线、测试和说明，组员可以按以下步骤复核。该许可的归档依据与原表声明均保留。[AI 来源说明](../AI_PROVENANCE.md) · [原始工作表快照](../../evidence/tactics-v1/source/spreadsheet-snapshot.json)
+Sheet2!A27 记载了原 AI 范围。2026-11-06，用户向本项目转述导师已明确允许此项目使用 AI 编码。V1 使用 AI 编写战术函数、模型接线、测试和说明，组员可以按以下步骤复核。该许可的归档依据与原表声明均保留。[原始工作表快照](../../evidence/tactics-v1/source/spreadsheet-snapshot.json)
 
 ## 先看十秒比赛
 

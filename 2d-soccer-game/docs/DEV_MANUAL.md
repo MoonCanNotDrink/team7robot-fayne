@@ -78,7 +78,7 @@ cd '/home/fayne/Documents/Robotics & AI/Robotics TDP/2d-soccer-game/tdp-migrated
 6. [测试手册](chapters/testing.md) 和 [已做过的扩展示例](chapters/extensions.md)。
 7. [原问题与修复边界](chapters/defects.md)、[参数表](generated/parameters.md)、[决策记录](DECISIONS.md)、[真实排错记录](chapters/troubleshooting.md)。
 8. [ROS 2标准消息与在线适配](chapters/ros2.md)、[Webots场景/相机/单动作/物理闭环](chapters/webots.md)、[M2实测数字](generated/m2_numbers.md)、[三维参数及假设](generated/webots_parameters.md)。
-9. [课程对应与导师问题](chapters/course_mapping.md)、[AI 声明](AI_PROVENANCE.md)。
+9. [课程对应与导师问题](chapters/course_mapping.md)。
 
 ![脚本生成的比赛快照](generated/match_snapshot.png)
 
