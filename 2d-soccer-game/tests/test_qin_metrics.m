@@ -24,9 +24,10 @@ verifyEqual(t,m.possessionSeconds,[.05 0 .05 .1],'AbsTol',1e-12);
 verifyEqual(t,m.robotSeconds(1,5),.05,'AbsTol',1e-12);
 end
 function testStateOverlapAndMovement(t)
-[r,q,P]=fixture(3);r(:,1)=-.25;r(:,9)=0;q(:,6)=1;q(:,80)=[2;3;0];r(1,25)=.1;
+% Robot 2 (a defender) holds the grant: global ID 1 is a goalkeeper and may not.
+[r,q,P]=fixture(3);r(:,2)=-.25;r(:,10)=0;q(:,6)=2;q(:,81)=[2;3;0];r(1,26)=.1;
 m=qinBehaviourMetrics(r,q,P);
-verifyEqual(t,m.robotSeconds(1,1:7),[.05 .15 .1 .05 .15 0 0],'AbsTol',1e-12);
+verifyEqual(t,m.robotSeconds(2,1:7),[.05 .15 .1 .05 .15 0 0],'AbsTol',1e-12);
 end
 function testMissingTacticsUnavailable(t)
 [r,~,P]=fixture(2);m=qinBehaviourMetrics(r,[],P);
@@ -94,4 +95,28 @@ m=qinBehaviourMetrics(r,q,P);
 verifyEqual(t,m.chasingIncludingKickSeconds(2),.15,'AbsTol',1e-12);
 verifyEqual(t,m.stationarySeconds(2,:),[.15 .05 .05 .05],'AbsTol',1e-12);
 verifyEqual(t,m.robotSeconds(2,3),0);
+end
+function testRejectGoalkeeperChaser(t)
+% A goalkeeper (global ID 1 or 5) is never an authorised chaser.
+[r,q,P]=fixture(2);q(:,6)=1;verifyError(t,@()qinBehaviourMetrics(r,q,P),'Qin:Tactics');
+[r,q,P]=fixture(2);q(:,7)=5;verifyError(t,@()qinBehaviourMetrics(r,q,P),'Qin:Tactics');
+[r,q,P]=fixture(3);q(2,6)=1;verifyError(t,@()qinBehaviourMetrics(r,q,P),'Qin:Tactics');
+% Outfield IDs of both teams, including V1.2 defenders, stay valid.
+for id=2:4
+    [r,q,P]=fixture(2);q(:,6)=id;q(:,7)=id+4;m=qinBehaviourMetrics(r,q,P);
+    verifyEqual(t,m.robotSeconds([id id+4],2),[2;2]*P.dt,'AbsTol',1e-12);
+end
+end
+function testValidatePolicyIds(t)
+for policy={[0 0],[2 1],[1 2],[0 2]}
+    [r,q,P]=fixture(2);P.v12Policy=policy{1};m=qinBehaviourMetrics(r,q,P);
+    verifyEqual(t,m.policyIds,policy{1});
+end
+[r,q,P]=fixture(2);m=qinBehaviourMetrics(r,q,P);verifyEmpty(t,m.policyIds);
+bad={[9 9],[3 0],[-1 0],[0.5 1],[0 NaN],[0 Inf],[0 1 2],[1;2],0,[],zeros(2,2),'01',{0,1},[true false],int8([0 1]).'};
+for k=1:numel(bad)
+    [r,q,P]=fixture(2);P.v12Policy=bad{k};
+    verifyError(t,@()qinBehaviourMetrics(r,q,P),'Qin:Policy');
+    verifyError(t,@()qinBehaviourMetrics(r,[],P),'Qin:Policy');
+end
 end

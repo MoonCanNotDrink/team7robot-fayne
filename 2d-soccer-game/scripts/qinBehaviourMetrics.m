@@ -1,11 +1,20 @@
 function m=qinBehaviourMetrics(trace,tactics,P,options)
 %QINBEHAVIOURMETRICS Offline Q1/Q2 metrics. Never runs or changes a simulation.
-% Samples represent (t-dt,t], using end-of-step truth and same-step decisions.
+% Row k covers the control step (t_k-dt,t_k]. trace(k,:) is the END-of-step
+% physical state; tactics(k,:) is the decision taken at the START of that step
+% from the PREVIOUS physical state trace(k-1,:) (the initial world for k=1).
+% Robot-time and possession metrics pair trace(k) with tactics(k); the
+% decisionHalf* metrics use trace(k-1).
 % Possession is an explicitly provisional geometric estimate, not lastTouch.
 c=replayColumns(); q=v1TraceColumns(); n=size(trace,1);
 if nargin<4,options=struct();end
 assert(isstruct(options)&&isscalar(options)&&all(ismember(fieldnames(options),{'centreBandMetres'})), ...
     'Qin:Options','Only centreBandMetres is supported.');
+if isfield(P,'v12Policy')
+    assert(isnumeric(P.v12Policy)&&isreal(P.v12Policy)&&isequal(size(P.v12Policy),[1 2]) ...
+        &&all(ismember(P.v12Policy,0:2)),'Qin:Policy', ...
+        'P.v12Policy must be a 1-by-2 numeric array containing only 0, 1 or 2.');
+end
 midTol=1e-9;if isfield(options,'centreBandMetres'),midTol=options.centreBandMetres;end
 assert(isnumeric(midTol)&&isscalar(midTol)&&isfinite(midTol)&&midTol>=0&&midTol<P.L/2, ...
     'Qin:Options','centreBandMetres must be nonnegative and smaller than half the pitch.');
@@ -24,9 +33,9 @@ if hasTactics
         'Qin:Tactics','Invalid or misaligned tactical fields.');
     assert(all(ismember(tactics(:,q.running),[0 1]))&&all(ismember(tactics(:,q.available),[0 1]),'all') ...
         &&all(ismember(tactics(:,q.skill),0:5),'all') ...
-        &&all(ismember(tactics(:,q.chaser(1)),0:4)) ...
-        &&all(ismember(tactics(:,q.chaser(2)),[0 5:8])), ...
-        'Qin:Tactics','Invalid state, availability or global chaser ID.');
+        &&all(ismember(tactics(:,q.chaser(1)),[0 2:4])) ...
+        &&all(ismember(tactics(:,q.chaser(2)),[0 6:8])), ...
+        'Qin:Tactics','Invalid state, availability or chaser ID (goalkeepers 1 and 5 may never be authorised).');
     running=logical(tactics(:,q.running));
 else
     % The controller reads the PREVIOUS referee state. Do not use this row's
