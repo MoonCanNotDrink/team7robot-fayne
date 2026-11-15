@@ -6,7 +6,7 @@ Python controller for the built-in Webots `Nao` (V5) robot.
 ## Folder layout
 ```
 nao_kick/
-  worlds/kick_recovery_test.wbt        test world: NAO, 14 cm ball, 9 x 6 m pitch
+  worlds/kick_recovery_test.wbt        test world: player NAO, goalie NAO, ball, 9 x 6 m pitch
   controllers/kick_recovery/
     kick_recovery.py                    main controller (modes below)
     poses.py                            stand pose, kick and roll-over keyframes  <- tune here
@@ -34,7 +34,9 @@ Change the NAO's `controllerArgs` field in the scene tree, then reload the world
 | `getup_test` | Lays the robot on its back 10 times at random headings and times the get-up. | `getup_test.csv` |
 | `play` | Walks to the ball, lines up with the target (default: right goal centre at x = 4.5 m), kicks, gets up if it falls, repeats. | Console |
 
-The Webots test world has a 9 m x 6 m marked playing area on 11 m x 8 m turf.
+The Webots test world has a red player NAO controlled by `kick_recovery` and a
+blue, stationary goalie NAO in front of the right goal. The world has a 9 m x
+6 m marked playing area on 11 m x 8 m turf.
 Both goals are 2.8 m wide overall (2.6 m clear between the posts), 1.2 m high,
 and use 0.1 m square posts and crossbar, matching `kidsize_pitch.wbt`.
 
