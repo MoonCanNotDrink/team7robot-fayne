@@ -11,6 +11,7 @@ nao_kick/
     kick_recovery.py                    main controller (modes below)
     poses.py                            stand pose, kick and roll-over keyframes  <- tune here
     motion_player.py                    plays keyframes and Webots .motion files
+  controllers/goalie/goalie.py          ball-tracking goalkeeper with sidesteps, kick and block
   motions/                              copy Webots' NAO motion files here (step 2)
 ```
 
@@ -35,8 +36,16 @@ Change the NAO's `controllerArgs` field in the scene tree, then reload the world
 | `play` | Walks to the ball, lines up with the target (default: right goal centre at x = 4.5 m), kicks, gets up if it falls, repeats. | Console |
 
 The Webots test world has a red player NAO controlled by `kick_recovery` and a
-blue, stationary goalie NAO in front of the right goal. The world has a 9 m x
-6 m marked playing area on 11 m x 8 m turf.
+blue goalie NAO in front of the right goal, controlled by `goalie`. The goalie
+tracks the simulated ball position and velocity, predicts whether it will cross
+the goal mouth up to 2.5 seconds ahead, then uses side-step motions to move
+toward the intercept. When the incoming ball is close and low, it plays the
+`Shoot.motion` kick to send it back; otherwise it spreads its arms and leans
+toward the intercept to block. The controller commands the NAO's maximum joint
+speeds and uses shorter transitions for the block and ready poses. It returns
+to a ready stance after the save. This uses Supervisor ground-truth state, not
+camera vision.
+The world has a 9 m x 6 m marked playing area on 11 m x 8 m turf.
 Both goals are 2.8 m wide overall (2.6 m clear between the posts), 1.2 m high,
 and use 0.1 m square posts and crossbar, matching `kidsize_pitch.wbt`.
 
