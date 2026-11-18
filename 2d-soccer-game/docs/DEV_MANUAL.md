@@ -86,12 +86,12 @@ cd '/home/fayne/Documents/Robotics & AI/Robotics TDP/2d-soccer-game/tdp-migrated
 
 ## 4. 干净 clone：按这份手册独立复现
 
-在本分支的 `2d-soccer-game/` 项目目录打开终端。以下命令从上一级本地仓库克隆 `fayne-bahaviours-tactics` 分支，在独立副本中复现。请使用尚不存在的目标目录。
+只使用本地 Git，不推送、不拉取远程、不安装依赖。临时 clone 放在任务 worktree 的 build 下，以符合本任务写入范围。使用一个**尚不存在**的目录，失败也保留它。
 
 ```bash
-mkdir -p build
-git clone --no-hardlinks --single-branch --branch fayne-bahaviours-tactics .. build/clean-room-final
-cd build/clean-room-final/2d-soccer-game
+cd '/home/fayne/Documents/Robotics & AI/Robotics TDP/2d-soccer-game/tdp-migrated-r1'
+git clone --no-hardlinks --single-branch --branch ai-migration-baseline . build/clean-room-final
+cd build/clean-room-final
 ./scripts/run_matlab.sh "tdpSetup; reproduce_all;"
 ```
 

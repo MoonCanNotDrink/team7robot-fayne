@@ -6,15 +6,15 @@ addpath(fullfile(root,'scripts'), fullfile(root,'algorithms'), ...
 matches = listReplayMatches(fullfile(root,'build'));
 viewer = [];
 
-picker = figure('Name','TDP Football - 比赛回放','NumberTitle','off', ...
+picker = figure('Name','TDP Football - Match Replay','NumberTitle','off', ...
     'MenuBar','none','ToolBar','none','Resize','off','Visible','off', ...
     'Position',[100 100 740 390],'Tag','TdpReplayPicker', ...
     'WindowKeyPressFcn',@keyPressed);
 cleanup = onCleanup(@()closePicker(picker)); %#ok<NASGU>
 movegui(picker,'center');
-hint = '选择一场比赛，双击或点「播放」。最近的比赛排在最上方。';
+hint = 'Select a match, then double-click it or press Play. The most recent match is at the top.';
 if isempty(matches)
-    hint = '还没有可回放的比赛。运行一场二维比赛，结束后再打开这里。';
+    hint = 'No matches to replay yet. Run a 2D match, then open this window again.';
 end
 list = uicontrol(picker,'Style','listbox','Units','normalized', ...
     'Position',[.035 .23 .93 .59],'FontSize',11,'String',{matches.label}, ...
@@ -25,9 +25,9 @@ uicontrol(picker,'Style','text','Units','normalized', ...
 feedback = uicontrol(picker,'Style','text','Units','normalized', ...
     'Position',[.035 .025 .55 .17],'HorizontalAlignment','left','String','');
 play = uicontrol(picker,'Style','pushbutton','Units','normalized', ...
-    'Position',[.61 .07 .16 .10],'String','播放','FontSize',12,'Callback',@openMatch);
+    'Position',[.61 .07 .16 .10],'String','Play','FontSize',12,'Callback',@openMatch);
 uicontrol(picker,'Style','pushbutton','Units','normalized', ...
-    'Position',[.80 .07 .16 .10],'String','关闭','FontSize',12, ...
+    'Position',[.80 .07 .16 .10],'String','Close','FontSize',12, ...
     'Callback',@(~,~)delete(picker));
 if isempty(matches)
     set([list,play],'Enable','off');
@@ -57,7 +57,7 @@ uiwait(picker);
         match = matches(get(list,'Value'));
         set(play,'Enable','off');
         set(picker,'Pointer','watch');
-        set(feedback,'String','正在读取比赛记录…');
+        set(feedback,'String','Loading match recording...');
         drawnow nocallbacks
         try
             rec = loadReplayRecording(match.file);
@@ -65,7 +65,7 @@ uiwait(picker);
             viewer = MatchReplay2D(rec.P,rec.Trace,match.label,'on',rec.Tactics);
         catch problem
             if isgraphics(picker)
-                set(feedback,'String',['无法播放这场比赛。' newline problem.message]);
+                set(feedback,'String',['Cannot play this match.' newline problem.message]);
                 set(picker,'Pointer','arrow');
                 set(play,'Enable','on');
             end

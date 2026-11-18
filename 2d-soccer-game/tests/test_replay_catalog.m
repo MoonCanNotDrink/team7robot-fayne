@@ -16,10 +16,10 @@ matches = listReplayMatches(root);
 t.verifyEqual({matches.file}, {stopped, headless, completed});
 t.verifyEqual({matches.status}, {'STOPPED_BY_USER','COMPLETED','COMPLETED'});
 t.verifySubstring(matches(1).label, '2026-11-06 11:03:05.343');
-t.verifySubstring(matches(1).label, '蓝 2 : 1 红');
+t.verifySubstring(matches(1).label, 'Blue 2 : 1 Red');
 t.verifySubstring(matches(1).label, '00:00.25');
-t.verifySubstring(matches(1).label, '提前停止');
-t.verifySubstring(matches(2).label, '已完赛');
+t.verifySubstring(matches(1).label, 'Stopped early');
+t.verifySubstring(matches(2).label, 'Completed');
 end
 
 function testIgnoreUnplayableAndUnrelatedRuns(t)

@@ -92,7 +92,7 @@ centers=cell2mat(arrayfun(@(h)center(h),patches,'UniformOutput',false));
 verifyTrue(t,any(all(abs(centers-[0.8 -0.6])<1e-9,2)),'robot 4 is drawn at its recorded position');
 verifyTrue(t,any(all(abs(centers-[1.25 -0.8])<1e-9,2)),'ball is drawn at its recorded position');
 verifySubstring(t,clockString(fig),sprintf('%02d:%05.2f',floor(trace(40,61)/60),mod(trace(40,61),60)));
-verifySubstring(t,clockString(fig),'帧 40 / 100');
+verifySubstring(t,clockString(fig),'frame 40 / 100');
 verifyEqual(t,textOf(findText(fig,'^BLUE')),'BLUE  2 : 1  RED');
 end
 
@@ -152,9 +152,9 @@ p=openPlayer(t,P,trace);p.Pause();
 p.SeekFrame(200);
 fig=p.Figure;
 verifyFalse(t,p.State().Playing);
-pauseButton=findobj(fig,'Type','uicontrol','Style','pushbutton','String','继续');
+pauseButton=findobj(fig,'Type','uicontrol','Style','pushbutton','String','Resume');
 verifyEqual(t,get(pauseButton,'Enable'),'off','nothing left to resume at the end');
-verifyEqual(t,statusString(fig),'回放结束');
+verifyEqual(t,statusString(fig),'Replay finished');
 p.Resume();verifyEqual(t,p.State().Frame,200,'resume at the end is a no-op');
 p.Restart();
 verifyEqual(t,p.State().Frame,1);
@@ -184,12 +184,12 @@ function testOnScreenControlsStillWork(t)
 p=openPlayer(t,P,trace);fig=p.Figure;
 slider=findobj(fig,'Type','uicontrol','Style','slider');
 speed=findobj(fig,'Type','uicontrol','Style','popupmenu');
-pauseButton=findobj(fig,'Type','uicontrol','Style','pushbutton','String','暂停');
-restart=findobj(fig,'Type','uicontrol','Style','pushbutton','String','从头播放');
+pauseButton=findobj(fig,'Type','uicontrol','Style','pushbutton','String','Pause');
+restart=findobj(fig,'Type','uicontrol','Style','pushbutton','String','Restart');
 verifyNumElements(t,slider,1);verifyNumElements(t,speed,1);
 verifyNumElements(t,pauseButton,1);verifyNumElements(t,restart,1);
 cb=get(pauseButton,'Callback');cb(pauseButton,[]);
-verifyFalse(t,p.State().Playing);verifyEqual(t,get(pauseButton,'String'),'继续');
+verifyFalse(t,p.State().Playing);verifyEqual(t,get(pauseButton,'String'),'Resume');
 frozen=p.State().Time;pause(0.5);verifyEqual(t,p.State().Time,frozen);
 set(slider,'Value',600);cb=get(slider,'Callback');cb(slider,[]);
 verifyEqual(t,p.State().Frame,600);verifyFalse(t,p.State().Playing);
@@ -318,11 +318,11 @@ trace(5,61)=trace(4,61);
 end
 
 function text=clockString(fig)
-text=textOf(findText(fig,'帧 \d+ / \d+'));
+text=textOf(findText(fig,'frame \d+ / \d+'));
 end
 
 function text=statusString(fig)
-text=textOf(findText(fig,'^(正在回放|已暂停|回放结束)$'));
+text=textOf(findText(fig,'^(Playing|Paused|Replay finished)$'));
 end
 
 function h=findText(fig,pattern)

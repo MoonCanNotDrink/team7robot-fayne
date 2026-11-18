@@ -25,14 +25,14 @@ if nargin < 4, visible = 'on'; end
 if nargin < 5, tactics = []; end
 assert(isnumeric(trace) && isreal(trace) && ismatrix(trace) && ...
     ~isempty(trace) && size(trace,2) == 98 && all(isfinite(trace),'all'), ...
-    'TDP:ReplayTrace','比赛轨迹需要包含 98 列有效数据。');
+    'TDP:ReplayTrace','The match trace must contain 98 columns of valid data.');
 times = trace(:,61);
-assert(all(diff(times) > 0),'TDP:ReplayTrace','比赛记录的时间必须逐帧递增。');
+assert(all(diff(times) > 0),'TDP:ReplayTrace','Recorded match times must strictly increase from frame to frame.');
 hasTactics = ~isempty(tactics);
 if hasTactics
     assert(isnumeric(tactics) && isreal(tactics) && isequal(size(tactics),[size(trace,1) 171]) && ...
         all(isfinite(tactics),'all') && max(abs(tactics(:,1)-times)) <= 1e-9, ...
-        'TDP:ReplayTactics','战术记录必须是与轨迹同行数、同时间的 N×171 有效数据。');
+        'TDP:ReplayTactics','The tactics log must be valid N-by-171 data with the same rows and times as the trace.');
 end
 events = replayEvents(trace,tactics);
 eventFrames = [events.frame];
@@ -55,18 +55,18 @@ player = struct('Figure',fig);
 try
     clock = timer('Name','TDP match replay','ExecutionMode','fixedSpacing', ...
         'Period',0.04,'TimerFcn',@advance);
-    set(fig,'Name',['TDP 足球回放 | ' char(displayName)], ...
+    set(fig,'Name',['TDP Football Replay | ' char(displayName)], ...
         'DeleteFcn',@(~,~)releaseTimer(clock), ...
         'WindowKeyPressFcn',@figureKey);
-    set(pitch.StartButton,'String','从头播放','Callback',@restart);
-    set(pitch.PauseButton,'String','暂停','Enable','on','Callback',@togglePlayback);
-    set(pitch.StopButton,'String','关闭','Enable','on','Callback',@(~,~)close(fig));
+    set(pitch.StartButton,'String','Restart','Callback',@restart);
+    set(pitch.PauseButton,'String','Pause','Enable','on','Callback',@togglePlayback);
+    set(pitch.StopButton,'String','Close','Enable','on','Callback',@(~,~)close(fig));
     set(pitch.SpeedControl,'String',{'0.25x','0.5x','1x','2x','4x','8x'}, ...
         'Value',3,'Callback',@changeSpeed);
     timeline = uicontrol(fig,'Style','slider','Units','normalized', ...
         'Position',[0.02 0.136 0.57 0.027],'Min',1,'Max',max(2,lastFrame), ...
         'SliderStep',min([1 100]/max(1,lastFrame-1),1),'Value',1, ...
-        'TooltipString','拖动到比赛中的任意时刻','Callback',@seek);
+        'TooltipString','Drag to any moment in the match','Callback',@seek);
     buildInspector();
     decorate();
     player = struct('Figure',fig,'State',@state,'Pause',@pausePlayback, ...
@@ -102,10 +102,10 @@ end
             'Position',[.47 .08 .05 .035]);
         set(pitch.SpeedControl,'Position',[.52 .075 .07 .055]);
         uicontrol(fig,'Style','pushbutton','Units','normalized','Position',[.32 .075 .065 .055], ...
-            'String','◀ 单帧','FontSize',11,'TooltipString','后退一帧（←）', ...
+            'String','◀ Step','FontSize',11,'TooltipString','Back one frame (←)', ...
             'Callback',@(~,~)stepFrames(-1));
         uicontrol(fig,'Style','pushbutton','Units','normalized','Position',[.39 .075 .065 .055], ...
-            'String','单帧 ▶','FontSize',11,'TooltipString','前进一帧（→）', ...
+            'String','Step ▶','FontSize',11,'TooltipString','Forward one frame (→)', ...
             'Callback',@(~,~)stepFrames(1));
         infoBox = uicontrol(fig,'Style','text','Units','normalized', ...
             'Position',[.585 .44 .405 .42],'HorizontalAlignment','left', ...
@@ -113,28 +113,28 @@ end
         uicontrol(fig,'Style','text','Units','normalized','Position',[.585 .41 .405 .027], ...
             'HorizontalAlignment','left','FontSize',10,'BackgroundColor',bg, ...
             'ForegroundColor',[.66 .76 .86],'String', ...
-            '事件列表  [R]=记录值发生变化   [I]=由规则推断（非直接记录）');
+            'Events  [R]=recorded change   [I]=inferred by rule (not recorded directly)');
         labels = eventLabels(events);
         enabled = 'on';
-        if isempty(labels), labels = {'（这份记录没有可列出的事件）'}; enabled = 'off'; end
+        if isempty(labels), labels = {'(No events to list in this recording)'}; enabled = 'off'; end
         eventList = uicontrol(fig,'Style','listbox','Units','normalized', ...
             'Position',[.585 .17 .405 .235],'FontName',fixedFont,'FontSize',9, ...
             'String',labels,'Value',1,'Enable',enabled,'Callback',@pickEvent);
         uicontrol(fig,'Style','text','Units','normalized','Position',[.60 .082 .07 .035], ...
-            'String','跳到 t(s)','FontSize',11,'BackgroundColor',bg,'ForegroundColor',fg);
+            'String','Go to t(s)','FontSize',11,'BackgroundColor',bg,'ForegroundColor',fg);
         timeEdit = uicontrol(fig,'Style','edit','Units','normalized', ...
             'Position',[.675 .075 .08 .055],'FontSize',12,'String','', ...
-            'TooltipString','输入仿真秒数，回车跳到不晚于该时刻的最近一帧','Callback',@seekFromEdit);
+            'TooltipString','Enter simulation seconds and press Enter to jump to the latest frame not after that time','Callback',@seekFromEdit);
         uicontrol(fig,'Style','text','Units','normalized','Position',[.77 .075 .22 .055], ...
             'HorizontalAlignment','left','FontSize',9,'BackgroundColor',bg, ...
             'ForegroundColor',[.66 .76 .86],'String', ...
-            '←/→ 单帧   空格 暂停/继续   [ ] 上/下一个事件');
+            '←/→ step  Space pause/play  [ ] prev/next event');
     end
 
     function decorate()
         % Refresh the parts of the window that MatchReplay2D owns.
         t = times(frame);
-        set(pitch.ClockText,'String',sprintf('%02d:%05.2f / %02d:%02d   |   帧 %d / %d   |   4 v 4', ...
+        set(pitch.ClockText,'String',sprintf('%02d:%05.2f / %02d:%02d   |   frame %d / %d   |   4 v 4', ...
             floor(t/60),mod(t,60),floor(P.Tmatch/60),round(mod(P.Tmatch,60)),frame,lastFrame));
         tacticsRow = [];
         if hasTactics, tacticsRow = tactics(frame,:); end
@@ -149,19 +149,19 @@ end
 
     function play()
         wall = tic;
-        set(pitch.PauseButton,'String','暂停','Enable','on');
-        pitch.setStatus('正在回放');
+        set(pitch.PauseButton,'String','Pause','Enable','on');
+        pitch.setStatus('Playing');
         if strcmp(clock.Running,'off'), start(clock); end
     end
 
     function holdPlayback()
         if strcmp(clock.Running,'on'), stop(clock); end
         if frame == lastFrame
-            set(pitch.PauseButton,'String','继续','Enable','off');
-            pitch.setStatus('回放结束');
+            set(pitch.PauseButton,'String','Resume','Enable','off');
+            pitch.setStatus('Replay finished');
         else
-            set(pitch.PauseButton,'String','继续','Enable','on');
-            pitch.setStatus('已暂停');
+            set(pitch.PauseButton,'String','Resume','Enable','on');
+            pitch.setStatus('Paused');
         end
     end
 
@@ -215,7 +215,7 @@ end
     function setRate(newRate)
         index = find(rates == newRate,1);
         assert(isscalar(newRate) && ~isempty(index),'TDP:ReplayRate', ...
-            '回放速度必须是 0.25、0.5、1、2、4、8 之一。');
+            'Replay speed must be one of 0.25, 0.5, 1, 2, 4, 8.');
         set(pitch.SpeedControl,'Value',index);
         applyRate(newRate);
     end
@@ -234,7 +234,7 @@ end
 
     function seekFrame(target)
         assert(isscalar(target) && isnumeric(target) && isfinite(target),'TDP:ReplaySeek', ...
-            '帧号必须是有限数。');
+            'Frame number must be a finite number.');
         show(min(max(round(target),1),lastFrame));
         anchorTime = times(frame);
         wall = tic;
@@ -243,7 +243,7 @@ end
 
     function seekTime(seconds)
         assert(isscalar(seconds) && isnumeric(seconds) && isreal(seconds) && isfinite(seconds), ...
-            'TDP:ReplaySeek','时间必须是有限实数（秒）。');
+            'TDP:ReplaySeek','Time must be a finite real number (seconds).');
         % Logged times are sums of dt, so 166.60 may be stored as 166.60000000000002.
         % A 1 microsecond tolerance keeps "seek to 166.60" from landing one row early.
         index = find(times <= seconds + 1e-6,1,'last');
@@ -254,7 +254,7 @@ end
     function seekFromEdit(src,~)
         seconds = str2double(get(src,'String'));
         if isnan(seconds)
-            pitch.setStatus('请输入数字（仿真秒）。');
+            pitch.setStatus('Enter a number (simulation seconds).');
             return
         end
         seekTime(seconds);
@@ -269,7 +269,7 @@ end
 
     function jumpToEvent(index)
         assert(isscalar(index) && index >= 1 && index <= numel(events) && index == round(index), ...
-            'TDP:ReplaySeek','事件编号超出范围。');
+            'TDP:ReplaySeek','Event index out of range.');
         pausePlayback();
         show(events(index).frame);
         anchorTime = times(frame);

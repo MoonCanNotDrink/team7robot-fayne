@@ -34,8 +34,13 @@ violations = check(violations,'tacticsFinite',~isfinite(tactics));
 violations = check(violations,'recordClocks', ...
     [abs(trace(:,61)-expectedTime)>1e-9 abs(tactics(:,c.time)-expectedTime)>1e-9]);
 violations = check(violations,'fixedRole',roleChanged);
+% V1: only MF or ST may hold the grant. V1.2 adds each team's interceptor roles.
+mayChase = false(2,4);
+mayChase(:,3:4) = true;
+if isfield(P,'v12Policy'), mayChase = mayChase | P.v12InterceptRole; end
 violations = check(violations,'chaserTeamAndRole', ...
-    [~ismember(chaser(:,1),[0 3 4]) ~ismember(chaser(:,2),[0 7 8])]);
+    [~ismember(chaser(:,1),[0 find(mayChase(1,:))]) ...
+     ~ismember(chaser(:,2),[0 4+find(mayChase(2,:))])]);
 violations = check(violations,'unavailableChaser',owner & ~available);
 violations = check(violations,'unauthorizedPrimaryIntent',primaryIntent & ~owner);
 violations = check(violations,'unauthorizedKickRequest',effectiveKick & ~owner);

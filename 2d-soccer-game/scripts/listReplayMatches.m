@@ -39,9 +39,9 @@ end
 receipt = jsondecode(fileread(receiptFile));
 switch receipt.status
     case 'COMPLETED'
-        state = '已完赛';
+        state = 'Completed';
     case 'STOPPED_BY_USER'
-        state = '提前停止';
+        state = 'Stopped early';
     otherwise
         return
 end
@@ -66,7 +66,7 @@ end
 started = datetime(stamp, 'InputFormat', 'yyyyMMdd-HHmmss-SSS', ...
     'Format', 'yyyy-MM-dd HH:mm:ss.SSS');
 seconds = round(steps * dt, 2);
-label = sprintf('%s    蓝 %d : %d 红    %02d:%05.2f    %s', ...
+label = sprintf('%s    Blue %d : %d Red    %02d:%05.2f    %s', ...
     char(started), goals(1), goals(2), floor(seconds/60), mod(seconds,60), state);
 match = struct('file', file, 'label', label, 'status', receipt.status);
 end

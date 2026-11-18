@@ -5,11 +5,14 @@ function [plans,m,v11] = v1TeamPlans(obs,team,prev,previousRequests,feedback,rec
 % 9 inputs: approved V1 model, where the 8th input is last tick's 1x8 skill
 % phases and the 9th the V1.1 monitor state (tdp.v11FallbackMemory). The V1.1
 % rule runs only when P.v11Fallback is true; otherwise v11 passes through.
+% V1.2 (P.v12Policy present, see tdp.v12TeamConfig): per-team tactical numbers
+% and a Defend interceptor chosen among the allowed field roles.
 first = 1+4*(team-1);
 midfielder = first+2;
 striker = first+3;
 t = obs(first).tSim;
 direction = P.dirSign(team);
+k = tactics(P,team);
 roles = [TdpRole.GK TdpRole.DF TdpRole.MF TdpRole.ST];
 plans = repmat(intent(TdpAction.Stop,[0 0],0,0,TdpRole.Unknown),1,4);
 
@@ -51,11 +54,11 @@ end
 heading = 0;
 if direction<0, heading = pi; end
 keeperX = direction*(-P.L/2+P.v1KeeperInset);
-defenderX = direction*(-P.L/2+P.defDist);
+defenderX = direction*(-P.L/2+k.defenderDist);
 plans(1) = intent(TdpAction.Goto,[keeperX 0],heading,0,roles(1));
 plans(2) = intent(TdpAction.Goto,[defenderX 0],heading,0,roles(2));
-plans(3) = intent(TdpAction.Goto,[-direction*P.v1CounterDepth 0],heading,0,roles(3));
-plans(4) = intent(TdpAction.Goto,[-direction*P.v1CounterDepth direction*P.v1SupportWidth],heading,0,roles(4));
+plans(3) = intent(TdpAction.Goto,[-direction*k.counterDepth 0],heading,0,roles(3));
+plans(4) = intent(TdpAction.Goto,[-direction*k.counterDepth direction*P.v1SupportWidth],heading,0,roles(4));
 
 if ~m.ballKnown
     m.phase = TdpTeamPhase.Search;
@@ -85,7 +88,7 @@ else
     threat = ball-ownGoal;
     distance = hypot(threat(1),threat(2));
     if distance>1e-9
-        block = ownGoal + P.defDist*threat/distance;
+        block = ownGoal + k.defenderDist*threat/distance;
     else
         block = [defenderX 0];
     end
@@ -103,9 +106,18 @@ else
             plans(3) = positionIntent(support,ball,roles(3));
         end
     else
-        screen = [-direction*P.v1ScreenDepth 0.5*ball(2)];
+        screen = [-direction*k.screenDepth 0.5*ball(2)];
         plans(3) = positionIntent(insidePitch(screen,P),ball,roles(3));
-        if available(3) && looseForMidfielder(obs(midfielder),source,team,midfielder,ball,t,P)
+        if k.intercept
+            m.chaser = interceptor(obs,source,team,first,prev.chaser,available,ball,direction,t,k,P);
+            if k.cover && m.chaser==first+1 && available(3)
+                % The defender left its line: the midfielder drops goal-side
+                % of the ball, half-way to the own goal and never further out
+                % than the defender line, so it is not in the clearance path.
+                cover = ownGoal + min(k.defenderDist,0.5*distance)*threat/max(distance,1e-9);
+                plans(3) = positionIntent(insidePitch(cover,P),ball,roles(3));
+            end
+        elseif available(3) && looseForMidfielder(obs(midfielder),source,team,midfielder,ball,t,P)
             m.chaser = midfielder;
         end
     end
@@ -116,12 +128,93 @@ else
         if m.phase~=TdpTeamPhase.Defend && hypot(goal(1)-ball(1),goal(2)-ball(2))<P.shootDist
             speed = P.shotSpeed;
         end
+        if k.intercept && m.phase==TdpTeamPhase.Defend
+            speed = k.clearSpeed;
+        end
         plans(local) = intent(TdpAction.Kick,goal,heading,speed,roles(local));
     end
 end
 for local = 1:4
     if ~available(local) || (local==4 && m.takeover) || (local==3 && m.recovering && ~finishCurrentKick)
         plans(local) = intent(TdpAction.Stop,[0 0],heading,0,roles(local));
+    end
+end
+end
+
+function k = tactics(P,team)
+% Tactical numbers of one team. Without the V1.2 fields these are the approved
+% V1 values and the Defend interceptor is off. Every P.v12* access is here.
+k = struct('intercept',false,'defenderDist',P.defDist,'screenDepth',P.v1ScreenDepth, ...
+    'counterDepth',P.v1CounterDepth,'roles',false(1,4),'range',zeros(1,4), ...
+    'depth',zeros(1,4),'contestDepth',0,'clearance',0,'speed',0,'margin',0, ...
+    'clearSpeed',P.dribbleSpeed,'cover',false);
+if isfield(P,'v12Policy')
+    k.intercept = true;
+    k.defenderDist = P.v12DefenderDist(team);
+    k.screenDepth = P.v12ScreenDepth(team);
+    k.counterDepth = P.v12CounterDepth(team);
+    k.roles = P.v12InterceptRole(team,:);
+    k.range = P.v12InterceptRange(team,:);
+    k.depth = P.v12InterceptDepth(team,:);
+    k.contestDepth = P.v12ContestDepth(team);
+    k.clearance = P.v12OpponentClearance(team);
+    k.speed = P.v12InterceptSpeed(team);
+    k.margin = P.v12SwitchMargin(team);
+    k.clearSpeed = P.v12ClearSpeed(team);
+    k.cover = P.v12CoverDefender(team);
+end
+end
+
+function id = interceptor(obs,source,team,first,previous,available,ball,direction,t,k,P)
+% V1.2 Defend rule. At most one allowed field role (DF, MF, ST; never GK)
+% challenges for the ball; 0 means everybody holds position.
+% A role qualifies when the ball is inside its depth limit and, for a new
+% challenge, slow enough. Behind the must-contest line that is sufficient.
+% In front of it the role must also be within its range and no opponent may
+% be at the ball. The closest qualifying role wins; an exact tie goes to the
+% lower role number (DF before MF before ST). The interceptor of the last
+% tick keeps the job unless a team-mate is closer by more than the margin,
+% and its own limits are relaxed by that margin, so the choice cannot flip
+% every tick.
+id = 0;
+best = Inf;
+forward = direction*ball(1);
+ballSpeed = hypot(source.ball.vx,source.ball.vy);
+for local = 2:4
+    i = first+local-1;
+    if ~k.roles(local) || ~available(local), continue; end
+    r = obs(i).robots(i);
+    d = hypot(r.x-ball(1),r.y-ball(2));
+    holder = previous==i;
+    margin = 0;
+    if holder, margin = k.margin; end
+    ok = forward<=k.depth(local)+margin && (holder || ballSpeed<=k.speed);
+    if ok && forward>k.contestDepth+margin
+        ok = d<=k.range(local)+margin && ...
+            (holder || uncontested(source,team,ball,k.clearance,t,P));
+    end
+    if ok && d-margin<best
+        best = d-margin;
+        id = i;
+    end
+end
+end
+
+function yes = uncontested(ob,team,ball,clearance,t,P)
+% No opponent within clearance of the ball. As in V1, an opponent whose
+% position is not currently known counts as being at the ball.
+yes = true;
+if clearance<=0, return; end
+opponentFirst = 1+4*(2-team);
+for i = opponentFirst:opponentFirst+3
+    if ~validRobot(ob,i,t,P)
+        yes = false;
+        return
+    end
+    opponent = ob.robots(i);
+    if hypot(opponent.x-ball(1),opponent.y-ball(2))<=clearance
+        yes = false;
+        return
     end
 end
 end
