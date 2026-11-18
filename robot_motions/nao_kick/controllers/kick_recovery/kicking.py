@@ -26,8 +26,24 @@ class KickingMixin:
         self.player.play([(max_s, {})], check=check, feedback=bal)
         return not self.is_fallen()
 
-    def kick(self, strength=KICK_STRENGTH, foot=KICK_FOOT):
+    def kick_profile(self, kind=None, foot=KICK_FOOT):
+        """Settings for a kick type, with the direction mirrored for the left foot
+        and turned into radians. Unknown types fall back to 'normal'."""
+        kind = kind or self.kick_type
+        if kind not in KICK_TYPES:
+            print(f"Unknown kick type '{kind}', using 'normal'")
+            kind = "normal"
+        prof = dict(KICK_TYPES[kind], kind=kind)
+        sign = 1.0 if foot == "R" else -1.0
+        prof["direction"] = math.radians(prof["direction"]) * sign
+        prof["side"] = -1.0 if foot == "R" else 1.0     # kicking foot's side in the robot's y
+        return prof
+
+    def kick(self, strength=None, foot=KICK_FOOT, kind=None):
         """Kick and return (peak ball speed m/s, fell during kick).
+
+        kind is a key of KICK_TYPES ('slow', 'normal', 'fast', 'side'); strength
+        overrides the type's own strength (kick_test uses this to sweep it).
 
         The custom kick runs in closed loop:
           1. shift the weight over the support foot (balance on both feet)
@@ -51,8 +67,13 @@ class KickingMixin:
                 self.brace_for_fall()
             return peak[0], fell
 
+        prof = self.kick_profile(kind, foot)
+        if strength is None:
+            strength = prof["strength"]
+        build = poses.side_kick_phases if prof["kind"] == "side" else poses.kick_phases
+        print(f"  {prof['kind']} kick, {foot} foot, strength {strength:.2f}")
         support = "L" if foot == "R" else "R"
-        stages = dict(poses.kick_phases(foot, strength))
+        stages = dict(build(foot, strength, tempo=prof["tempo"]))
         both = Balancer(self)                          # baseline: the settled standing tilt
 
         # 1. weight shift
@@ -60,9 +81,12 @@ class KickingMixin:
         if res != "done":
             return self._kick_fell("shift", peak[0])
 
-        # 2. make sure the kicking foot is (nearly) unloaded before lifting it
-        if not self._unload(foot, both, watch):
+        # 2. make sure the kicking foot is (nearly) unloaded before lifting it,
+        #    then rebuild the swing for the shift actually used
+        shift = self._unload(foot, both, watch)
+        if shift is None:
             return self._kick_fell("shift", peak[0])
+        stages = dict(build(foot, strength, shift=shift, tempo=prof["tempo"]))
 
         # 3. swing on one foot
         one = Balancer(self, legs=support)
@@ -97,11 +121,12 @@ class KickingMixin:
 
     def _unload(self, foot, bal, watch):
         """Grow the weight shift until the kicking foot carries < UNLOAD_SHARE.
-        Without foot sensors this does nothing. Returns False if the robot fell."""
+        Returns the weight shift used (rad), or None if the robot fell.
+        Without foot sensors the shift stays at WEIGHT_SHIFT."""
+        shift = poses.WEIGHT_SHIFT
         share = self.feet.share(foot)
         if share is None:
-            return True
-        shift = poses.WEIGHT_SHIFT
+            return shift
         t_end = self.robot.getTime() + UNLOAD_MAX_S
         while share is not None and share > UNLOAD_SHARE:
             if shift >= poses.WEIGHT_SHIFT_MAX or self.robot.getTime() > t_end:
@@ -111,9 +136,9 @@ class KickingMixin:
             res = self.player.play([(0.1, poses.weight_shift_pose(foot, shift)), (0.1, {})],
                                    check=watch, feedback=bal)
             if res != "done":
-                return False
+                return None
             share = self.feet.share(foot)
-        return True
+        return shift
 
     def _kick_fell(self, stage, peak):
         self._report_kick_fall(stage, self.player.frame_index, KICK_STAGE_PHASES.get(stage, []))
@@ -129,16 +154,25 @@ class KickingMixin:
               + ("fell forwards" if fz < -0.3 else "fell backwards" if fz > 0.3 else
                  "fell to the left" if lz < -0.3 else "fell to the right" if lz > 0.3 else "tilted"))
 
-    def stance_target(self, target, foot):
-        """Where the robot should stand to kick the ball towards target."""
-        side = -1.0 if foot == "R" else 1.0            # ball offset in the robot's y
+    def stance_target(self, target, foot, kind=None):
+        """Where the robot should stand, and which way it should face, to kick
+        the ball towards target with the given kick type.
+
+        Returns (gx, gy, kick_dir, face, (bx, by, ux, uy, lx, ly)): stance point,
+        ball direction, robot heading, and the ball position with the unit
+        vectors along and to the left of the kick direction.
+        """
+        prof = self.kick_profile(kind, foot)
         bx, by = self.ball_pos()
         kick_dir = math.atan2(target[1] - by, target[0] - bx)
+        face = wrap(kick_dir - prof["direction"])        # side kick: stand side-on to the target
         ux, uy = math.cos(kick_dir), math.sin(kick_dir)
         lx, ly = -uy, ux                                # left of the kick direction
-        gx = bx - ux * BALL_X - side * lx * BALL_Y
-        gy = by - uy * BALL_X - side * ly * BALL_Y
-        return gx, gy, kick_dir, (bx, by, ux, uy, lx, ly)
+        fx, fy = prof["ball_x"], prof["side"] * prof["ball_y"]   # ball in the robot frame
+        c, s = math.cos(face), math.sin(face)
+        gx = bx - (c * fx - s * fy)
+        gy = by - (s * fx + c * fy)
+        return gx, gy, kick_dir, face, (bx, by, ux, uy, lx, ly)
 
     def errors_to(self, gx, gy):
         """Position error to (gx, gy) in the robot frame: (forward, left, distance)."""
@@ -147,28 +181,31 @@ class KickingMixin:
         c, s = math.cos(yaw), math.sin(yaw)
         return c * ex_w + s * ey_w, -s * ex_w + c * ey_w, math.hypot(ex_w, ey_w)
 
-    def ready_to_kick(self, target=TARGET, foot=KICK_FOOT):
+    def ready_to_kick(self, target=None, foot=KICK_FOOT, kind=None):
         """Return True when the ball is already at the kicking foot and aligned."""
-        gx, gy, kick_dir, (bx, by, ux, uy, _, _) = self.stance_target(target, foot)
+        target = target or self.target
+        gx, gy, kick_dir, face, (bx, by, ux, uy, _, _) = self.stance_target(target, foot, kind)
         ex, ey, _ = self.errors_to(gx, gy)
         x, y, _ = self.robot_pose()
         # The ball must be ahead of the robot; this avoids treating a ball
         # beside or behind the kicking foot as ready just because the target
         # stance point happens to be nearby.
         ball_forward = (bx - x) * ux + (by - y) * uy
-        heading_error = abs(wrap(kick_dir - self.robot_pose()[2]))
+        heading_error = abs(wrap(face - self.robot_pose()[2]))
         return (ball_forward > 0.0
                 and abs(ex) <= POS_TOL_X
                 and abs(ey) <= POS_TOL_Y
                 and heading_error <= HEAD_TOL)
 
-    def position_for_kick(self, target=TARGET, foot=KICK_FOOT, max_actions=30):
-        """Walk until the ball is just in front of the kicking foot, facing the target.
+    def position_for_kick(self, target=None, foot=KICK_FOOT, max_actions=30, kind=None):
+        """Walk until the ball is at the kicking foot, facing the way the kick type needs
+        (towards the target, or side-on for a side kick).
 
         Returns True when lined up, False if it fell or ran out of actions.
         """
+        target = target or self.target
         for _ in range(max_actions):
-            gx, gy, kick_dir, (bx, by, ux, uy, lx, ly) = self.stance_target(target, foot)
+            gx, gy, kick_dir, face, (bx, by, ux, uy, lx, ly) = self.stance_target(target, foot, kind)
             x, y, yaw = self.robot_pose()
             ahead = (x - bx) * ux + (y - by) * uy > -0.10    # level with or past the ball
             dist = math.hypot(gx - x, gy - y)
@@ -183,10 +220,10 @@ class KickingMixin:
                 # far: walk to the approach point 0.45 m behind the ball, on the kick line
                 res = self.walk_to(ax_, ay_, tol=0.12)
             else:
-                # close: face the target, then fix sideways and forward errors
+                # close: turn to the kicking heading, then fix sideways and forward errors
                 ex, ey, _ = self.errors_to(gx, gy)
-                if abs(wrap(kick_dir - yaw)) > HEAD_TOL:
-                    res = self.turn_to(kick_dir)
+                if abs(wrap(face - yaw)) > HEAD_TOL:
+                    res = self.turn_to(face)
                 elif abs(ey) > POS_TOL_Y:
                     sgn = 1.0 if ey > 0 else -1.0
                     name = "SideStepLeft" if sgn > 0 else "SideStepRight"

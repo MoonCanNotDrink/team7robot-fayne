@@ -80,7 +80,7 @@ def weight_shift_pose(foot="R", shift=WEIGHT_SHIFT):
     return {"LHipRoll": sh, "RHipRoll": sh, "LAnkleRoll": -sh, "RAnkleRoll": -sh}
 
 
-def kick_phases(foot="R", strength=0.7, shift=WEIGHT_SHIFT):
+def kick_phases(foot="R", strength=0.7, shift=WEIGHT_SHIFT, tempo=1.0):
     """The kick as named stages, so the controller can check balance between them.
 
     Returns a list of (stage name, keyframe sequence):
@@ -89,6 +89,8 @@ def kick_phases(foot="R", strength=0.7, shift=WEIGHT_SHIFT):
       centre  move the body back between the feet
     The support-side arm opens a little for sideways balance and the arms
     counter-swing against the kicking leg to cancel the yaw it causes.
+    tempo scales only the back-swing and swing-through (< 1 faster, > 1 slower),
+    so a slow kick does not spend longer standing on one foot.
     strength in [0, 1] changes how far back the leg swings and how fast it
     swings through; both raise the ball speed.
     """
@@ -103,15 +105,61 @@ def kick_phases(foot="R", strength=0.7, shift=WEIGHT_SHIFT):
         # lift the kicking foot
         (0.6, {"RHipPitch": -0.85, "RKneePitch": 1.70, "RAnklePitch": -0.85}),
         # back-swing (bigger for stronger kicks); arms wind up the other way    TUNE
-        (0.35, {"RHipPitch": -0.50 + 0.30 * s, "RKneePitch": 1.80, "RAnklePitch": -0.90,
+        (0.35 * tempo, {"RHipPitch": -0.50 + 0.30 * s, "RKneePitch": 1.80, "RAnklePitch": -0.90,
                 "LShoulderPitch": 1.45 + 0.5 * arm, "RShoulderPitch": 1.45 - 0.5 * arm}),
         # swing through: faster and further for stronger kicks; arms counter-swing  TUNE
-        (0.32 - 0.18 * s, {"RHipPitch": -1.00 - 0.25 * s, "RKneePitch": 0.35, "RAnklePitch": 0.10,
+        ((0.32 - 0.18 * s) * tempo, {"RHipPitch": -1.00 - 0.25 * s, "RKneePitch": 0.35, "RAnklePitch": 0.10,
                            "LShoulderPitch": 1.45 - arm, "RShoulderPitch": 1.45 + 0.5 * arm}),
         (0.15, {}),
         # retract and put the foot down, still leaning on the support foot
         (0.5, {"RHipPitch": -0.85, "RKneePitch": 1.70, "RAnklePitch": -0.85,
                "LShoulderPitch": 1.45, "RShoulderPitch": 1.45}),
+        (0.6, {"RHipPitch": -0.45, "RKneePitch": 0.90, "RAnklePitch": -0.45}),
+        (0.4, {}),
+    ]
+    centre_seq = [
+        (0.9, {"LHipRoll": 0.0, "RHipRoll": 0.0, "LAnkleRoll": 0.0, "RAnkleRoll": 0.0,
+               "LShoulderRoll": STAND["LShoulderRoll"]}),
+        (0.4, {}),
+    ]
+    stages = [("shift", shift_seq), ("swing", swing_seq), ("centre", centre_seq)]
+    if foot == "R":
+        return stages
+    return [(name, mirror_sequence(seq)) for name, seq in stages]
+
+
+SIDE_KICK_LIFT = 0.08       # TUNE how high the foot is lifted for the side kick (as hip pitch, rad)
+
+
+def side_kick_phases(foot="R", strength=0.7, shift=WEIGHT_SHIFT, tempo=1.0):
+    """Side kick: the ball sits beside the OUTSIDE of the kicking foot and the
+    leg swings outwards (hip roll), pushing the ball sideways, away from the
+    support leg. A right-foot side kick sends the ball to the robot's right.
+
+    Same stages as kick_phases so the controller balances it the same way.
+    The sole is kept parallel to the floor by setting AnkleRoll = -HipRoll.
+    """
+    s = _clamp01(strength)
+    lift = -0.45 - SIDE_KICK_LIFT                # hip pitch a little more forward than STAND
+    # Rolls are relative to the weight-shift pose (RHipRoll = -shift there). There is
+    # no inward back-swing: after the shift the feet are only ~10 cm apart, so drawing
+    # the foot in would hit the support leg. Power comes from the swing speed instead.
+    rest = -shift
+    out = rest - (0.20 + 0.25 * s)               # swing out (RHipRoll more negative)      TUNE
+    shift_seq = [
+        (0.6, dict(STAND)),
+        (0.9, dict(weight_shift_pose("R", shift), LShoulderRoll=0.40)),
+        (0.3, {}),
+    ]
+    # the support leg keeps the weight-shift roll; the kicking leg gets its own roll on top
+    swing_seq = [
+        # lift the kicking foot just clear of the ground
+        (0.5, {"RHipPitch": lift, "RKneePitch": 1.10, "RAnklePitch": -(1.10 + lift)}),  # sole flat
+        # swing out: faster for stronger kicks; the left arm opens to balance
+        ((0.30 - 0.18 * s) * tempo, {"RHipRoll": out, "RAnkleRoll": -out, "LShoulderRoll": 0.60}),
+        (0.15, {}),
+        # bring the leg back under the hip and put the foot down
+        (0.5, {"RHipRoll": rest, "RAnkleRoll": -rest, "LShoulderRoll": 0.40}),
         (0.6, {"RHipPitch": -0.45, "RKneePitch": 0.90, "RAnklePitch": -0.45}),
         (0.4, {}),
     ]

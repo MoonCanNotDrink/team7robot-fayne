@@ -4,6 +4,9 @@ The goalie reads the simulated ball's Supervisor position and velocity, predicts
 where it will cross the goal line, sidesteps toward that intercept, then kicks
 the ball away when it is close or blocks it otherwise. This is ground-truth
 simulation sensing; it does not use the camera.
+
+controllerArgs: "right" (default) defends the goal at x = +4.5 and faces -x;
+"left" defends the goal at x = -4.5 and faces +x.
 """
 import math
 import os
@@ -17,7 +20,7 @@ from kick_recovery.motion_player import (
     MotionPlayer, load_motion_file, motion_to_sequence)
 
 
-GOAL_LINE_X = 4.0
+GOAL_LINE_X = 4.0           # distance of the goalie's line from the centre (m)
 GOAL_HALF_WIDTH = 1.30
 TRIGGER_TIME = 2.5
 MIN_TOWARD_SPEED = 0.12
@@ -42,10 +45,14 @@ READY = {
 }
 
 
-def block_pose(world_y):
-    """Make a wide, low block and lean toward the predicted world-space y."""
-    # The goalie faces -x, so its local left/right is reversed in world y.
-    side = -1.0 if world_y >= 0 else 1.0
+def block_pose(world_y, goal=1.0):
+    """Make a wide, low block and lean toward the predicted world-space y.
+
+    goal is +1 for the right goal (goalie faces -x) and -1 for the left goal
+    (goalie faces +x)."""
+    # Facing -x the goalie's local left/right is reversed in world y; facing +x it is not.
+    local_y = -goal * world_y
+    side = 1.0 if local_y > 0 else -1.0
     pose = dict(READY)
     pose.update({
         "HeadYaw": side * 0.35,
@@ -61,7 +68,9 @@ def block_pose(world_y):
 
 
 class Goalie:
-    def __init__(self):
+    def __init__(self, goal_side="right"):
+        self.goal = -1.0 if goal_side == "left" else 1.0     # +1: right goal, -1: left goal
+        self.line_x = self.goal * GOAL_LINE_X
         self.robot = Supervisor()
         self.me = self.robot.getSelf()
         self.ts = int(self.robot.getBasicTimeStep())
@@ -95,7 +104,7 @@ class Goalie:
             motor.setPosition(value)
         self.player = MotionPlayer(self.robot, self.motors, self.sensors, self.ts)
         self.player.target = dict(self.current)
-        print("Goalie active: tracking simulated ball and defending right goal.")
+        print(f"Goalie active: tracking simulated ball and defending {goal_side} goal.")
 
     def _load_motions(self):
         here = os.path.dirname(os.path.abspath(__file__))
@@ -122,9 +131,11 @@ class Goalie:
         """Return predicted y and arrival time for a ball approaching the goal."""
         p = self.ball.getPosition()
         v = self.ball.getVelocity()
-        if v[0] <= MIN_TOWARD_SPEED or p[0] >= GOAL_LINE_X:
+        g = self.goal
+        # toward the goal means moving in +x for the right goal, -x for the left one
+        if g * v[0] <= MIN_TOWARD_SPEED or g * p[0] >= g * self.line_x:
             return None
-        seconds = (GOAL_LINE_X - p[0]) / v[0]
+        seconds = (self.line_x - p[0]) / v[0]
         if seconds < 0 or seconds > TRIGGER_TIME:
             return None
         y = p[1] + v[1] * seconds
@@ -162,12 +173,12 @@ class Goalie:
         """Use complete side-step clips toward the detected ball intercept."""
         while abs(target_y - self.me.getPosition()[1]) > LATERAL_TOLERANCE:
             delta_y = target_y - self.me.getPosition()[1]
-            # The goalie faces -x, so its local left/right is reversed in world y.
-            motion = "SideStepRight" if delta_y > 0 else "SideStepLeft"
+            # Facing -x (right goal) world +y is the goalie's right; facing +x it is its left.
+            motion = "SideStepRight" if delta_y * self.goal > 0 else "SideStepLeft"
             frames = self.motions.get(motion)
             if not frames:
                 break
-            print(f"Goalie sidestepping {'left' if delta_y < 0 else 'right'} "
+            print(f"Goalie sidestepping {'right' if motion == 'SideStepRight' else 'left'} "
                   f"toward y={target_y:.2f} m.")
             if not self.play_motion(motion, time_scale=SIDE_STEP_TIME_SCALE):
                 return target_y, arrival, False
@@ -184,7 +195,7 @@ class Goalie:
         ball = self.ball.getPosition()
         goalie = self.me.getPosition()
         distance = math.hypot(ball[0] - goalie[0], ball[1] - goalie[1])
-        return (ball[0] <= goalie[0] + 0.08
+        return (self.goal * (ball[0] - goalie[0]) <= 0.08     # ball in front of the goalie
                 and ball[2] <= 0.35
                 and distance <= KICK_RANGE)
 
@@ -205,10 +216,11 @@ class Goalie:
                     if not self.play_motion("Shoot"):
                         break
                 else:
-                    side = "right" if y >= self.me.getPosition()[1] else "left"
+                    side = ("right" if self.goal * (y - self.me.getPosition()[1]) >= 0
+                            else "left")
                     print(f"Ball detected, blocking to {side} "
                           f"(arrives in {arrival:.2f}s).")
-                    if not self.move_to(block_pose(y), BLOCK_TRANSITION_TIME):
+                    if not self.move_to(block_pose(y, self.goal), BLOCK_TRANSITION_TIME):
                         break
                 blocking_until = self.robot.getTime() + 0.65
                 ready = False
@@ -219,4 +231,4 @@ class Goalie:
 
 
 if __name__ == "__main__":
-    Goalie().run()
+    Goalie(sys.argv[1] if len(sys.argv) > 1 else "right").run()

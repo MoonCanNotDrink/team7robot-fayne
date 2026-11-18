@@ -45,7 +45,24 @@ BAL_KD_ANKLE = 0.08         # TUNE damping on the lean rate
 BAL_KP_HIP = 0.5            # TUNE rad of hip correction per unit of lean
 BAL_MAX = 0.35              # largest correction allowed (rad)
 
+# Kick types. Pick one with controllerArgs "kick=slow|normal|fast|side" (default KICK_TYPE).
+#   strength   0..1: back-swing size and swing speed
+#   tempo      scales the back-swing and swing-through only (< 1 faster, > 1 slower); the weight
+#              shift and re-centring always run at normal speed because they set the balance
+#   ball_x     where the ball sits in front of the robot (m)
+#   ball_y     how far the ball sits to the kicking-foot side (m)
+#   direction  ball direction relative to the robot's heading for a RIGHT-foot kick
+#              (deg, mirrored for the left foot): -90 = to the robot's right
+KICK_TYPE = "normal"
+KICK_TYPES = {
+    "slow":   dict(strength=0.35, tempo=1.5, ball_x=BALL_X, ball_y=BALL_Y, direction=0),  # TUNE
+    "normal": dict(strength=KICK_STRENGTH, tempo=1.0, ball_x=BALL_X, ball_y=BALL_Y, direction=0),
+    "fast":   dict(strength=1.0, tempo=0.75, ball_x=BALL_X, ball_y=BALL_Y, direction=0),  # TUNE
+    "side":   dict(strength=0.8, tempo=1.0, ball_x=0.03, ball_y=0.17, direction=-90),     # TUNE
+}
+
 STRENGTHS = [0.2, 0.4, 0.6, 0.8, 1.0]
+KICK_COMPARE_TRIALS = 3     # kicks per type in kick_compare mode
 KICKS_PER_STRENGTH = 3
 GETUP_TRIALS = 10
 MAX_GETUP_ATTEMPTS = 3

@@ -7,8 +7,11 @@ Python controller for the built-in Webots `Nao` (V5) robot.
 ```
 nao_kick/
   worlds/kick_recovery_test.wbt        test world: player NAO, goalie NAO, ball, 9 x 6 m pitch
+  worlds/match.wbt                     4 v 4 match: per team 3 field players + 1 goalie
   controllers/kick_recovery/
     kick_recovery.py                    main controller (modes below)
+    settings.py                         tuning values, kick types   <- tune here
+    kicking.py / walking.py / recovery.py   kick + positioning, walking, falls and get-up
     poses.py                            stand pose, kick and roll-over keyframes  <- tune here
     motion_player.py                    plays keyframes and Webots .motion files
     balance.py                          ankle/hip balance controller and foot-sensor reader
@@ -32,9 +35,53 @@ Change the NAO's `controllerArgs` field in the scene tree, then reload the world
 | Mode | What it does | Output |
 | --- | --- | --- |
 | `sensor_check` | Prints the accelerometer while you drag the robot onto its back and front. Run this **first**. | Console |
-| `kick_test` | Puts the ball in front of the kicking foot and kicks at strengths 0.2–1.0, 3 kicks each. Records peak ball speed, distance rolled, direction error and falls; gets up after falls. | `kick_test.csv` |
+| `kick_test` | Puts the ball at the kicking foot and kicks at strengths 0.2–1.0, 3 kicks each, with the kick type from `kick=...` (default `normal`). Records peak ball speed, distance rolled, direction error and falls; gets up after falls. | `kick_test.csv` |
+| `kick_compare` | Kicks each kick type (slow, normal, fast, side) 3 times at its own strength and logs the same values, to compare them. | `kick_compare.csv` |
 | `getup_test` | Lays the robot on its back 10 times at random headings and times the get-up. | `getup_test.csv` |
 | `play` | Walks to the ball, lines up with the target (default: right goal centre at x = 4.5 m), kicks, gets up if it falls, repeats. | Console |
+
+Options can be added as extra `controllerArgs` entries, in any order:
+
+| Option | Values | Meaning |
+| --- | --- | --- |
+| `attack=` | `right` (default), `left` | goal to kick towards: x = +4.5 m or x = -4.5 m |
+| `kick=` | `slow`, `normal` (default), `fast`, `side` | kick type used by `play` and `kick_test` |
+
+Example: `controllerArgs ["play", "attack=left", "kick=fast"]`.
+The goalie controller takes `"right"` (default) or `"left"` for the goal it defends.
+
+### Kick types
+Defined in `KICK_TYPES` in `settings.py`; all use the same closed-loop balance
+(weight-shift check, support-ankle balance, abort and plant foot).
+
+| Type | Keyframes | Strength | Swing tempo | Ball position | Ball goes |
+| --- | --- | --- | --- | --- | --- |
+| `slow` | `poses.kick_phases` | 0.35 | 1.5x slower | in front of the kicking foot | straight ahead, gently (short pass) |
+| `normal` | `poses.kick_phases` | 0.8 | normal | in front of the kicking foot | straight ahead |
+| `fast` | `poses.kick_phases` | 1.0 | 0.75x (faster) | in front of the kicking foot | straight ahead, hard (shot) |
+| `side` | `poses.side_kick_phases` | 0.8 | normal | 3 cm ahead, 17 cm out beside the kicking foot | sideways, away from the support leg (right foot: to the robot's right) |
+
+`tempo` only changes the back-swing and swing-through, never the weight shift or
+the time on one foot, so the slow kick is not less stable. For the side kick the
+robot lines up side-on to the target (`stance_target`), and the leg swings out
+with hip roll while AnkleRoll = -HipRoll keeps the sole flat. There is no inward
+back-swing: after the weight shift the feet are only ~10 cm apart.
+Tune the side kick with `kick_test` and `kick=side`: adjust `ball_x` / `ball_y`
+until the foot meets the ball centre, then `SIDE_KICK_LIFT` and the swing line
+marked `TUNE` in `poses.side_kick_phases`.
+
+### Match world
+`worlds/match.wbt` has two teams of four, each 3 field players + 1 goalie:
+
+| Team | Robots | Field players | Goalie |
+| --- | --- | --- | --- |
+| red (default colour) | `NAO`, `RED_2`, `RED_3`, `RED_GOALIE` | `kick_recovery`, `["play"]`, attack the right goal | `goalie`, `["left"]` at x = -4 |
+| blue | `BLUE_1`, `BLUE_2`, `BLUE_3`, `GOALIE` | `kick_recovery`, `["play", "attack=left"]` | `goalie`, `["right"]` at x = +4 |
+
+There are no team behaviours yet: every field player runs the same `play` loop,
+so all six chase the ball. Use `kick_recovery_test.wbt` for `kick_test`,
+`kick_compare` and `getup_test`; those modes move the robot and the ball, which
+the other players would interfere with.
 
 The Webots test world has a red player NAO controlled by `kick_recovery` and a
 blue goalie NAO in front of the right goal, controlled by `goalie`. The goalie
