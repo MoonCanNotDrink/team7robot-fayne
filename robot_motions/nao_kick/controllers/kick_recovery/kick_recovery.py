@@ -18,6 +18,7 @@ import sys
 from controller import Supervisor
 
 import poses
+from balance import Balancer, FootSensors
 from kicking import KickingMixin
 from recovery import RecoveryMixin
 from settings import *  # shared controller tuning values
@@ -57,6 +58,7 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
                 self.sensors[name] = ps
         self.acc = self.robot.getDevice("accelerometer")
         self.acc.enable(self.ts)
+        self.feet = FootSensors(self.robot, self.ts)
         # one step so the position sensors and accelerometer hold real values (not NaN)
         self.robot.step(self.ts)
         self.player = MotionPlayer(self.robot, self.motors, self.sensors, self.ts)
@@ -70,9 +72,12 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
         self.motions = self._load_motions()
         self.log_dir = os.path.dirname(os.path.abspath(__file__))
         self._tilt_steps = 0
+        self._prev_uz = (1.0, self.robot.getTime())
         self.walk_speed = WALK_SPEED
         self.turn_speed = TURN_SPEED
         print(f"Motion speeds: walk {self.walk_speed:.1f}x, turn {self.turn_speed:.1f}x")
+        print("Foot force sensors:", "found (closed-loop weight shift on)" if self.feet.available
+              else "not found (fixed weight shift)")
 
     # ------------------------------------------------------------ shared helpers
     def _load_motions(self):
@@ -127,10 +132,16 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
         res = self.player.play(seq, check=check)
         if res == "done" and stop_after is not None:
             res = self.player.play([(0.5, poses.STAND)], check=check)
+        if res == "aborted" and abort_on_fall:
+            self.brace_for_fall()
         return res
 
     def stand(self, duration=1.0):
-        return self.player.play([(duration, poses.STAND)], check=self.fall_check)
+        """Blend to the stand pose with ankle/hip balance aiming for an upright torso."""
+        bal = Balancer(self)
+        bal.base_p = bal.base_r = 0.0
+        self._tilt_steps = 0
+        return self.player.play([(duration, poses.STAND)], check=self.fall_check, feedback=bal)
 
     # ------------------------------------------------------------ recovery
     # ------------------------------------------------------------ test set-up
@@ -168,6 +179,8 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
             if ready:
                 print("Ball already in front and aligned; kicking without repositioning.")
             if ready or self.position_for_kick():
+                if not self.wait_until_still():
+                    continue
                 speed, fell = self.kick()
                 kicks += 1
                 print(f"Kick {kicks}: peak ball speed {speed:.2f} m/s, fell: {fell}")
@@ -188,6 +201,7 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
             for trial in range(1, KICKS_PER_STRENGTH + 1):
                 self.reset_robot(0, 0, 0)
                 self.place_ball(BALL_X, side * BALL_Y)
+                self.wait_until_still()
                 b0 = self.ball_pos()
                 speed, fell = self.kick(strength=0 if s == "builtin" else s)
                 self.step(3.0)                               # let the ball roll

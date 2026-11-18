@@ -11,6 +11,7 @@ nao_kick/
     kick_recovery.py                    main controller (modes below)
     poses.py                            stand pose, kick and roll-over keyframes  <- tune here
     motion_player.py                    plays keyframes and Webots .motion files
+    balance.py                          ankle/hip balance controller and foot-sensor reader
   controllers/goalie/goalie.py          ball-tracking goalkeeper with sidesteps, kick and block
   motions/                              copy Webots' NAO motion files here (step 2)
 ```
@@ -68,10 +69,35 @@ CSV files are written next to `kick_recovery.py`.
 - Ball and robot positions come from the Supervisor (ground truth). Replace
   them with camera-based estimates later.
 
+## Stability features
+- **Closed-loop kick** (`kick`): the kick runs in three stages (`poses.kick_phases`).
+  With the `LFsr` / `RFsr` foot sensors the weight shift starts at `WEIGHT_SHIFT`
+  and grows (up to `WEIGHT_SHIFT_MAX`) until the kicking foot carries less than
+  `UNLOAD_SHARE` of the weight; only then is the foot lifted.
+  Without the sensors the fixed `WEIGHT_SHIFT` is used.
+- **Ankle/hip balance** (`balance.Balancer`): during standing, the weight shift and
+  the swing, the torso tilt is fed back to AnklePitch/AnkleRoll (and HipPitch)
+  of the supporting foot. Gains are at the top of `balance.py`.
+- **Kick abort**: if the torso tilts more than `KICK_ABORT_TILT` while on one foot,
+  the swing stops and the kicking foot is put straight down (`plant_foot_sequence`).
+- **Arm counter-swing**: the arms swing against the kicking leg (`ARM_SWING`)
+  and the support-side arm opens slightly for sideways balance.
+- **Settle before kicking** (`wait_until_still`): waits until the body has stopped swaying.
+- **Clean walk stops**: after reaching a walking target the gait keeps running until
+  both feet are on the ground (at most `WALK_STOP_MAX_S`), then blends to the stand pose.
+- **Flat side steps**: `SIDE_STEP_WIDTH` now scales AnkleRoll with HipRoll so the sole lands flat.
+- **Early fall detection and bracing**: a fall is also detected when the torso is past
+  `FALLING_UZ` and still tipping; the robot then takes a protective pose
+  (`poses.brace_pose`) before it hits the ground.
+
 ## Tuning order
 1. `sensor_check`: on the back `ax` should be positive; if not, set `BACK_SIGN = -1`.
 2. Kick balance: run `kick_test` at strength 0.2. If the robot falls towards the
    kicking side, increase `WEIGHT_SHIFT`; if it falls towards the support side, decrease it.
+   With foot sensors, watch for "kicking foot still carries ..." in the console.
+   If the balance correction oscillates, lower `KP_*` / raise `KD_*` in `balance.py`;
+   if the robot drifts over slowly, raise `KP_*`. Set `KICK_ABORT_TILT` just above the
+   tilt seen in good kicks.
 3. Kick power: raise the strengths only once 0.2 is stable; tune the back-swing
    and swing lines marked `TUNE` in `poses.py`.
 4. Contact: adjust `BALL_X` / `BALL_Y` until the foot meets the ball centre

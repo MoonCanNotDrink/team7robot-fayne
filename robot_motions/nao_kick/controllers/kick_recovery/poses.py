@@ -67,38 +67,96 @@ def _clamp01(x):
 # --------------------------------------------------------------------------
 # Kick
 # --------------------------------------------------------------------------
-WEIGHT_SHIFT = 0.3  # TUNE  hip/ankle roll used to move the body over the support foot
+WEIGHT_SHIFT = 0.22         # TUNE hip/ankle roll used to move the body over the support foot
+                            #      (with foot sensors this is only the starting value, see below)
+WEIGHT_SHIFT_MAX = 0.32     # with foot sensors the shift grows up to this until the foot is unloaded
+ARM_SWING = 0.5             # TUNE arm counter-swing during the kick (0 = arms still)
 
 
-def kick_sequence(foot="R", strength=0.7):
-    """Keyframes for a forward kick with the given foot.
+def weight_shift_pose(foot="R", shift=WEIGHT_SHIFT):
+    """Parallel hip/ankle roll that moves the body over the support foot while
+    keeping the torso upright and both soles flat."""
+    sh = -shift if foot == "R" else shift   # right-foot kick: lean over the LEFT foot
+    return {"LHipRoll": sh, "RHipRoll": sh, "LAnkleRoll": -sh, "RAnkleRoll": -sh}
 
+
+def kick_phases(foot="R", strength=0.7, shift=WEIGHT_SHIFT):
+    """The kick as named stages, so the controller can check balance between them.
+
+    Returns a list of (stage name, keyframe sequence):
+      shift   stand, then move the body over the support foot (both feet down)
+      swing   lift, back-swing, swing through, retract, put the foot down
+      centre  move the body back between the feet
+    The support-side arm opens a little for sideways balance and the arms
+    counter-swing against the kicking leg to cancel the yaw it causes.
     strength in [0, 1] changes how far back the leg swings and how fast it
     swings through; both raise the ball speed.
     """
     s = _clamp01(strength)
-    sh = -WEIGHT_SHIFT          # right-foot kick: lean over the LEFT foot
-    seq = [
+    arm = ARM_SWING * (0.5 + 0.5 * s)
+    shift_seq = [
         (0.6, dict(STAND)),
-        # 1. move the body over the support (left) foot
-        (0.9, {"LHipRoll": sh, "RHipRoll": sh, "LAnkleRoll": -sh, "RAnkleRoll": -sh}),
+        (0.9, dict(weight_shift_pose("R", shift), LShoulderRoll=0.40)),
         (0.3, {}),
-        # 2. lift the kicking foot
+    ]
+    swing_seq = [
+        # lift the kicking foot
         (0.6, {"RHipPitch": -0.85, "RKneePitch": 1.70, "RAnklePitch": -0.85}),
-        # 3. back-swing (bigger for stronger kicks)                       TUNE
-        (0.35, {"RHipPitch": -0.50 + 0.30 * s, "RKneePitch": 1.80, "RAnklePitch": -0.90}),
-        # 4. swing through: faster and further for stronger kicks       TUNE
-        (0.32 - 0.20 * s, {"RHipPitch": -1.00 - 0.25 * s, "RKneePitch": 0.35, "RAnklePitch": 0.10}),
+        # back-swing (bigger for stronger kicks); arms wind up the other way    TUNE
+        (0.35, {"RHipPitch": -0.50 + 0.30 * s, "RKneePitch": 1.80, "RAnklePitch": -0.90,
+                "LShoulderPitch": 1.45 + 0.5 * arm, "RShoulderPitch": 1.45 - 0.5 * arm}),
+        # swing through: faster and further for stronger kicks; arms counter-swing  TUNE
+        (0.32 - 0.18 * s, {"RHipPitch": -1.00 - 0.25 * s, "RKneePitch": 0.35, "RAnklePitch": 0.10,
+                           "LShoulderPitch": 1.45 - arm, "RShoulderPitch": 1.45 + 0.5 * arm}),
         (0.15, {}),
-        # 5. retract and put the foot down, still leaning on the support foot
-        (0.5, {"RHipPitch": -0.85, "RKneePitch": 1.70, "RAnklePitch": -0.85}),
+        # retract and put the foot down, still leaning on the support foot
+        (0.5, {"RHipPitch": -0.85, "RKneePitch": 1.70, "RAnklePitch": -0.85,
+               "LShoulderPitch": 1.45, "RShoulderPitch": 1.45}),
         (0.6, {"RHipPitch": -0.45, "RKneePitch": 0.90, "RAnklePitch": -0.45}),
         (0.4, {}),
-        # 6. back to the centre
-        (0.9, {"LHipRoll": 0.0, "RHipRoll": 0.0, "LAnkleRoll": 0.0, "RAnkleRoll": 0.0}),
+    ]
+    centre_seq = [
+        (0.9, {"LHipRoll": 0.0, "RHipRoll": 0.0, "LAnkleRoll": 0.0, "RAnkleRoll": 0.0,
+               "LShoulderRoll": STAND["LShoulderRoll"]}),
         (0.4, {}),
     ]
+    stages = [("shift", shift_seq), ("swing", swing_seq), ("centre", centre_seq)]
+    if foot == "R":
+        return stages
+    return [(name, mirror_sequence(seq)) for name, seq in stages]
+
+
+def kick_sequence(foot="R", strength=0.7):
+    """The whole kick as one open-loop keyframe sequence (no balance checks)."""
+    return [frame for _, seq in kick_phases(foot, strength) for frame in seq]
+
+
+def plant_foot_sequence(foot="R"):
+    """Emergency: put the kicking foot straight down and widen the stance a bit."""
+    seq = [
+        (0.18, {"RHipPitch": -0.45, "RKneePitch": 0.90, "RAnklePitch": -0.45,
+                "RHipRoll": -0.05, "RAnkleRoll": 0.05,
+                "LShoulderPitch": 1.45, "RShoulderPitch": 1.45}),
+        (0.5, {"LHipRoll": 0.0, "LAnkleRoll": 0.0}),
+    ]
     return seq if foot == "R" else mirror_sequence(seq)
+
+
+def brace_pose(direction):
+    """Protective pose once a fall cannot be stopped.
+
+    forward: arms out in front to take the impact, head back.
+    backward / side: chin tucked, arms forward, knees bent to drop the hips
+    so the robot sits down instead of hitting the floor with its head.
+    """
+    if direction == "forward":
+        return {"HeadPitch": -0.5, "LShoulderPitch": 0.2, "RShoulderPitch": 0.2,
+                "LShoulderRoll": 0.25, "RShoulderRoll": -0.25,
+                "LElbowRoll": -0.3, "RElbowRoll": 0.3}
+    return {"HeadPitch": 0.45, "LShoulderPitch": 0.6, "RShoulderPitch": 0.6,
+            "LShoulderRoll": 0.15, "RShoulderRoll": -0.15,
+            "LHipPitch": -0.9, "RHipPitch": -0.9, "LKneePitch": 1.8, "RKneePitch": 1.8,
+            "LAnklePitch": -0.9, "RAnklePitch": -0.9}
 
 
 # --------------------------------------------------------------------------

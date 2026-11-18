@@ -24,6 +24,17 @@ WALK_HEAD_TOL = math.radians(25)   # walk without turning first if heading is wi
 # Fall detection uses the torso orientation from the Supervisor (no sign guessing).
 UPRIGHT_MIN = 0.5           # fallen when the torso's up-axis is tilted more than ~60 deg
 FALL_CONFIRM_S = 0.15       # tilt must last this long, so a wobble is not counted as a fall
+FALLING_UZ = 0.75           # also "falling" when tilted past ~40 deg AND still tipping over
+FALLING_RATE = -1.0         # ... at this rate of torso up_z (1/s); lets the robot brace in time
+
+# Kick and stop stability
+UNLOAD_SHARE = 0.15         # kicking foot may carry at most this share of the weight before lifting
+UNLOAD_MAX_S = 1.5          # give up growing the weight shift after this long
+KICK_ABORT_TILT = 0.25      # TUNE torso tilt (rad) on one foot that aborts the swing and plants the foot
+STILL_RATE = 0.3            # body counts as still below this angular speed (rad/s)
+STILL_HOLD_S = 0.25         # ... for this long
+STILL_MAX_S = 2.0           # longest wait for the body to settle before a kick
+WALK_STOP_MAX_S = 0.6       # after reaching a walk target, wait at most this long for both feet down
 
 # Balance after getting up: hold the get-up's last pose, then move slowly to the
 # stand pose while an ankle/hip controller corrects forward/backward lean.
@@ -41,6 +52,8 @@ MAX_GETUP_ATTEMPTS = 3
 
 KICK_PHASES = ["stand", "weight shift", "hold", "lift foot", "back-swing", "swing",
                "hold", "retract", "put foot down", "hold", "re-centre", "hold"]
+KICK_STAGE_PHASES = {"shift": KICK_PHASES[0:3], "swing": KICK_PHASES[3:10],
+                     "centre": KICK_PHASES[10:12]}
 
 WALK_MOTIONS = ["Forwards", "Forwards50", "Backwards", "SideStepLeft", "SideStepRight",
                 "TurnLeft40", "TurnRight40", "TurnLeft60", "TurnRight60",

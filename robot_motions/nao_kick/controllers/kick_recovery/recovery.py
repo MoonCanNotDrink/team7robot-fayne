@@ -1,5 +1,6 @@
 """Fall detection and get-up behavior for the NAO controller."""
 
+import math
 import sys
 
 import poses
@@ -22,12 +23,28 @@ class RecoveryMixin:
         return self.torso_axes()[2] < UPRIGHT_MIN
 
     def fall_check(self):
-        """Debounced check for use during motions (tilt must persist)."""
-        if self.is_fallen():
+        """Debounced check for use during motions (tilt must persist).
+
+        Triggers when the torso is past UPRIGHT_MIN, or earlier when it is past
+        FALLING_UZ and still tipping, so there is time to brace for the impact.
+        """
+        uz = self.torso_axes()[2]
+        t = self.robot.getTime()
+        prev_uz, prev_t = self._prev_uz
+        rate = (uz - prev_uz) / (t - prev_t) if t > prev_t else 0.0
+        self._prev_uz = (uz, t)
+        if uz < UPRIGHT_MIN or (uz < FALLING_UZ and rate < FALLING_RATE):
             self._tilt_steps += 1
         else:
             self._tilt_steps = 0
         return self._tilt_steps * self.ts / 1000.0 >= FALL_CONFIRM_S
+
+    def brace_for_fall(self):
+        """A fall cannot be stopped any more: take a protective pose quickly."""
+        fz = self.torso_axes()[0]
+        direction = "forward" if fz < -0.3 else "backward"
+        print(f"  falling {direction}: bracing")
+        self.player.play([(0.2, poses.brace_pose(direction))])
 
     def lying_state(self):
         """'up', 'back', 'front' or 'side' from the torso orientation."""

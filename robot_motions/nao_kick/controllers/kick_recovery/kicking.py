@@ -4,36 +4,130 @@ import math
 import sys
 
 import poses
+from balance import Balancer
 from motion_player import motion_to_sequence
 from settings import *  # shared kick and positioning tuning values
 
 
 class KickingMixin:
-    def kick(self, strength=KICK_STRENGTH, foot=KICK_FOOT):
-        """Kick and return (peak ball speed m/s, fell during kick)."""
-        peak = [0.0]
+    def wait_until_still(self, max_s=STILL_MAX_S):
+        """Stand with balance control until the body stops swaying (or max_s).
+        Returns False if the robot fell."""
+        bal = Balancer(self)
+        bal.base_p = bal.base_r = 0.0          # aim for an upright torso, not the current sway
+        still = [0]
 
         def check():
+            w = self.me.getVelocity()[3:6]
+            still[0] = still[0] + 1 if math.sqrt(sum(x * x for x in w)) < STILL_RATE else 0
+            return self.fall_check() or still[0] * self.ts / 1000.0 >= STILL_HOLD_S
+
+        self._tilt_steps = 0
+        self.player.play([(max_s, {})], check=check, feedback=bal)
+        return not self.is_fallen()
+
+    def kick(self, strength=KICK_STRENGTH, foot=KICK_FOOT):
+        """Kick and return (peak ball speed m/s, fell during kick).
+
+        The custom kick runs in closed loop:
+          1. shift the weight over the support foot (balance on both feet)
+          2. with foot sensors, keep shifting until the kicking foot is unloaded
+          3. swing on one foot with ankle balance on the support foot; if the
+             torso tilts past KICK_ABORT_TILT, plant the foot instead of falling
+          4. move back between the feet
+        """
+        peak = [0.0]
+
+        def watch():
             peak[0] = max(peak[0], self.ball_speed())
             return self.fall_check()
 
-        if USE_BUILTIN_SHOOT and "Shoot" in self.motions:
-            seq = motion_to_sequence(self.motions["Shoot"])
-        else:
-            seq = poses.kick_sequence(foot, strength)
         self._tilt_steps = 0
-        res = self.player.play(seq, check=check)
-        fell = res == "aborted" or self.is_fallen()
-        if fell:
-            names = KICK_PHASES if not USE_BUILTIN_SHOOT else []
-            i = self.player.frame_index
-            phase = names[i] if i < len(names) else f"frame {i}"
-            fz, lz, uz = self.torso_axes()
-            print(f"  fell during kick phase '{phase}' "
-                  f"(torso forward_z={fz:.2f}, left_z={lz:.2f}): "
-                  + ("fell forwards" if fz < -0.3 else "fell backwards" if fz > 0.3 else
-                     "fell to the left" if lz < -0.3 else "fell to the right" if lz > 0.3 else "tilted"))
-        return peak[0], fell
+        if USE_BUILTIN_SHOOT and "Shoot" in self.motions:
+            res = self.player.play(motion_to_sequence(self.motions["Shoot"]), check=watch)
+            fell = res == "aborted" or self.is_fallen()
+            if fell:
+                self._report_kick_fall("Shoot.motion", self.player.frame_index)
+                self.brace_for_fall()
+            return peak[0], fell
+
+        support = "L" if foot == "R" else "R"
+        stages = dict(poses.kick_phases(foot, strength))
+        both = Balancer(self)                          # baseline: the settled standing tilt
+
+        # 1. weight shift
+        res = self.player.play(stages["shift"], check=watch, feedback=both)
+        if res != "done":
+            return self._kick_fell("shift", peak[0])
+
+        # 2. make sure the kicking foot is (nearly) unloaded before lifting it
+        if not self._unload(foot, both, watch):
+            return self._kick_fell("shift", peak[0])
+
+        # 3. swing on one foot
+        one = Balancer(self, legs=support)
+        one.base_p, one.base_r = both.base_p, both.base_r
+        tipping = [False]
+
+        def watch_swing():
+            if watch():
+                return True
+            p, r = one.tilt()
+            if math.hypot(p, r) > KICK_ABORT_TILT:
+                tipping[0] = True
+                return True
+            return False
+
+        res = self.player.play(stages["swing"], check=watch_swing, feedback=one)
+        if tipping[0] and not self.is_fallen():
+            p, r = one.tilt()
+            print(f"  kick aborted: tilt pitch {p:.2f}, roll {r:.2f} rad - planting the foot")
+            self.player.play(poses.plant_foot_sequence(foot), feedback=Balancer(self))
+            self.stand(0.6)
+            self._tilt_steps = 0
+            return peak[0], self.is_fallen()
+        if res != "done":
+            return self._kick_fell("swing", peak[0])
+
+        # 4. back to the centre
+        res = self.player.play(stages["centre"], check=watch, feedback=Balancer(self))
+        if res != "done" or self.is_fallen():
+            return self._kick_fell("centre", peak[0])
+        return peak[0], False
+
+    def _unload(self, foot, bal, watch):
+        """Grow the weight shift until the kicking foot carries < UNLOAD_SHARE.
+        Without foot sensors this does nothing. Returns False if the robot fell."""
+        share = self.feet.share(foot)
+        if share is None:
+            return True
+        shift = poses.WEIGHT_SHIFT
+        t_end = self.robot.getTime() + UNLOAD_MAX_S
+        while share is not None and share > UNLOAD_SHARE:
+            if shift >= poses.WEIGHT_SHIFT_MAX or self.robot.getTime() > t_end:
+                print(f"  weight shift {shift:.2f} rad: kicking foot still carries {share:.0%}")
+                break
+            shift = min(poses.WEIGHT_SHIFT_MAX, shift + 0.02)
+            res = self.player.play([(0.1, poses.weight_shift_pose(foot, shift)), (0.1, {})],
+                                   check=watch, feedback=bal)
+            if res != "done":
+                return False
+            share = self.feet.share(foot)
+        return True
+
+    def _kick_fell(self, stage, peak):
+        self._report_kick_fall(stage, self.player.frame_index, KICK_STAGE_PHASES.get(stage, []))
+        if self.is_fallen() or self._tilt_steps:
+            self.brace_for_fall()
+        return peak, True
+
+    def _report_kick_fall(self, stage, i, names=()):
+        phase = names[i] if i < len(names) else f"frame {i}"
+        fz, lz, uz = self.torso_axes()
+        print(f"  fell during kick stage '{stage}', phase '{phase}' "
+              f"(torso forward_z={fz:.2f}, left_z={lz:.2f}): "
+              + ("fell forwards" if fz < -0.3 else "fell backwards" if fz > 0.3 else
+                 "fell to the left" if lz < -0.3 else "fell to the right" if lz > 0.3 else "tilted"))
 
     def stance_target(self, target, foot):
         """Where the robot should stand to kick the ball towards target."""
@@ -104,7 +198,8 @@ class KickingMixin:
                     seq = motion_to_sequence(self.motions[name],
                                              time_scale=1.0 / SIDE_STEP_SPEED)
                     for _, pose in seq:
-                        for joint in ("LHipRoll", "RHipRoll"):
+                        # scale ankle roll with hip roll so the sole stays flat
+                        for joint in ("LHipRoll", "RHipRoll", "LAnkleRoll", "RAnkleRoll"):
                             if joint in pose:
                                 pose[joint] *= SIDE_STEP_WIDTH
                     self._tilt_steps = 0
@@ -112,6 +207,8 @@ class KickingMixin:
                     if res == "quit":
                         sys.exit(0)
                     if res != "done" or self.is_fallen():
+                        if res == "aborted":
+                            self.brace_for_fall()
                         return False
                     print(f"  {name} complete; checking lateral position again")
                 elif ex > POS_TOL_X:
