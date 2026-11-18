@@ -24,7 +24,7 @@ MIN_TOWARD_SPEED = 0.12
 STEP_MS = 20
 LATERAL_TOLERANCE = 0.20
 KICK_RANGE = 0.45
-MIN_KICK_TIME = 0.25
+SIDE_STEP_TIME_SCALE = 0.65  # lower values play the recorded step faster
 BLOCK_TRANSITION_TIME = 0.10
 SIDE_STEP_MOTIONS = ("SideStepLeft", "SideStepRight")
 GOALIE_MOTIONS = (*SIDE_STEP_MOTIONS, "Shoot")
@@ -148,12 +148,12 @@ class Goalie:
         self.player.target = dict(self.current)
         return True
 
-    def play_motion(self, name):
+    def play_motion(self, name, time_scale=1.0):
         """Play a recorded NAO motion and keep the tracked pose in sync."""
         frames = self.motions.get(name)
         if not frames:
             return False
-        sequence = motion_to_sequence(frames, blend_in=0.2)
+        sequence = motion_to_sequence(frames, time_scale=time_scale, blend_in=0.2)
         result = self.player.play(sequence, ease=False)
         self.current = dict(self.player.target)
         return result == "done"
@@ -169,7 +169,7 @@ class Goalie:
                 break
             print(f"Goalie sidestepping {'left' if delta_y < 0 else 'right'} "
                   f"toward y={target_y:.2f} m.")
-            if not self.play_motion(motion):
+            if not self.play_motion(motion, time_scale=SIDE_STEP_TIME_SCALE):
                 return target_y, arrival, False
             intercept = self.ball_intercept()
             if intercept is None:
@@ -179,7 +179,7 @@ class Goalie:
 
     def can_kick_back(self, arrival):
         """Kick a low incoming ball only when it is within the striker's reach."""
-        if "Shoot" not in self.motions or arrival < MIN_KICK_TIME:
+        if "Shoot" not in self.motions or arrival <= 0.0:
             return False
         ball = self.ball.getPosition()
         goalie = self.me.getPosition()
