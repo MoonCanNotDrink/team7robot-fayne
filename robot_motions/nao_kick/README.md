@@ -38,7 +38,7 @@ Change the NAO's `controllerArgs` field in the scene tree, then reload the world
 The Webots test world has a red player NAO controlled by `kick_recovery` and a
 blue goalie NAO in front of the right goal, controlled by `goalie`. The goalie
 tracks the simulated ball position and velocity, predicts whether it will cross
-the goal mouth up to 2.5 seconds ahead, then uses side-step motions to move
+the goal mouth up to 2.5 seconds ahead, then immediately uses side-step motions
 toward the intercept. When the incoming ball is close and low, it plays the
 `Shoot.motion` kick to send it back; otherwise it spreads its arms and leans
 toward the intercept to block. The controller commands the NAO's maximum joint

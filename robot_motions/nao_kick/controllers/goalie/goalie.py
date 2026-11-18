@@ -12,8 +12,9 @@ import sys
 from controller import Supervisor
 
 sys.path.insert(0, os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "kick_recovery")))
-from motion_player import MotionPlayer, load_motion_file, motion_to_sequence
+    os.path.join(os.path.dirname(__file__), "..")))
+from kick_recovery.motion_player import (
+    MotionPlayer, load_motion_file, motion_to_sequence)
 
 
 GOAL_LINE_X = 4.0
@@ -158,17 +159,13 @@ class Goalie:
         return result == "done"
 
     def move_laterally_to(self, target_y, arrival):
-        """Use complete side-step clips while there is time before the shot."""
+        """Use complete side-step clips toward the detected ball intercept."""
         while abs(target_y - self.me.getPosition()[1]) > LATERAL_TOLERANCE:
             delta_y = target_y - self.me.getPosition()[1]
             # The goalie faces -x, so its local left/right is reversed in world y.
             motion = "SideStepRight" if delta_y > 0 else "SideStepLeft"
             frames = self.motions.get(motion)
             if not frames:
-                break
-            duration = sum(step_duration for step_duration, _ in
-                           motion_to_sequence(frames, blend_in=0.2))
-            if arrival <= duration + BLOCK_TRANSITION_TIME:
                 break
             print(f"Goalie sidestepping {'left' if delta_y < 0 else 'right'} "
                   f"toward y={target_y:.2f} m.")
