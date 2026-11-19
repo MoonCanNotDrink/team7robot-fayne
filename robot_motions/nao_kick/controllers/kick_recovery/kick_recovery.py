@@ -3,8 +3,14 @@
 Modes (set in the robot's controllerArgs field in Webots):
   play         walk to the ball, line up, kick towards the target, get up if fallen, repeat
   kick_test    repeat kicks at several strengths and log ball speed, distance, direction, falls
+  kick_compare kick each kick type (slow, normal, fast, side) a few times and log the same
   getup_test   lay the robot on its back again and again and log get-up success and time
   sensor_check print accelerometer readings while you move the robot (to check fall signs)
+
+Options (extra controllerArgs entries, any order):
+  attack=right|left   goal to attack: right = x = +4.5 (default), left = x = -4.5
+  kick=slow|normal|fast|side   kick type used in play and kick_test (default KICK_TYPE)
+Example: controllerArgs ["play", "attack=left", "kick=fast"]
 
 Needs: the robot's 'supervisor' field set to TRUE (used for ground-truth ball and
 robot positions and for resetting tests) and a ball Solid with DEF name BALL.
@@ -18,6 +24,7 @@ import sys
 from controller import Supervisor
 
 import poses
+from balance import Balancer, FootSensors
 from kicking import KickingMixin
 from recovery import RecoveryMixin
 from settings import *  # shared controller tuning values
@@ -42,7 +49,9 @@ def axis_angle_from_yaw_pitch(yaw, pitch):
 
 
 class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
-    def __init__(self):
+    def __init__(self, attack="right", kick_type=KICK_TYPE):
+        self.target = (TARGET[0] if attack != "left" else -TARGET[0], TARGET[1])
+        self.kick_type = kick_type
         self.robot = Supervisor()
         self.ts = int(self.robot.getBasicTimeStep())
         self.motors, self.sensors = {}, {}
@@ -57,6 +66,7 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
                 self.sensors[name] = ps
         self.acc = self.robot.getDevice("accelerometer")
         self.acc.enable(self.ts)
+        self.feet = FootSensors(self.robot, self.ts)
         # one step so the position sensors and accelerometer hold real values (not NaN)
         self.robot.step(self.ts)
         self.player = MotionPlayer(self.robot, self.motors, self.sensors, self.ts)
@@ -70,9 +80,12 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
         self.motions = self._load_motions()
         self.log_dir = os.path.dirname(os.path.abspath(__file__))
         self._tilt_steps = 0
+        self._prev_uz = (1.0, self.robot.getTime())
         self.walk_speed = WALK_SPEED
         self.turn_speed = TURN_SPEED
         print(f"Motion speeds: walk {self.walk_speed:.1f}x, turn {self.turn_speed:.1f}x")
+        print("Foot force sensors:", "found (closed-loop weight shift on)" if self.feet.available
+              else "not found (fixed weight shift)")
 
     # ------------------------------------------------------------ shared helpers
     def _load_motions(self):
@@ -127,10 +140,16 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
         res = self.player.play(seq, check=check)
         if res == "done" and stop_after is not None:
             res = self.player.play([(0.5, poses.STAND)], check=check)
+        if res == "aborted" and abort_on_fall:
+            self.brace_for_fall()
         return res
 
     def stand(self, duration=1.0):
-        return self.player.play([(duration, poses.STAND)], check=self.fall_check)
+        """Blend to the stand pose with ankle/hip balance aiming for an upright torso."""
+        bal = Balancer(self)
+        bal.base_p = bal.base_r = 0.0
+        self._tilt_steps = 0
+        return self.player.play([(duration, poses.STAND)], check=self.fall_check, feedback=bal)
 
     # ------------------------------------------------------------ recovery
     # ------------------------------------------------------------ test set-up
@@ -168,6 +187,8 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
             if ready:
                 print("Ball already in front and aligned; kicking without repositioning.")
             if ready or self.position_for_kick():
+                if not self.wait_until_still():
+                    continue
                 speed, fell = self.kick()
                 kicks += 1
                 print(f"Kick {kicks}: peak ball speed {speed:.2f} m/s, fell: {fell}")
@@ -177,35 +198,55 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
                     print("GOAL - resetting the ball")
                     self.place_ball(random.uniform(-1, 1), random.uniform(-1.5, 1.5))
 
+    KICK_CSV_HEADER = ["kick", "strength", "trial", "peak_speed_mps", "distance_m",
+                       "direction_error_deg", "fell", "recovered", "recovery_s"]
+
+    def _kick_trial(self, kind, strength, trial, w):
+        """Reset, put the ball where this kick type needs it, kick, log one CSV row.
+        direction_error_deg is measured against the kick type's intended direction."""
+        prof = self.kick_profile(kind, KICK_FOOT)
+        self.reset_robot(0, 0, 0)
+        self.place_ball(prof["ball_x"], prof["side"] * prof["ball_y"])
+        self.wait_until_still()
+        b0 = self.ball_pos()
+        speed, fell = self.kick(strength=strength, kind=kind)
+        self.step(3.0)                               # let the ball roll
+        b1 = self.ball_pos()
+        dist = math.hypot(b1[0] - b0[0], b1[1] - b0[1])
+        derr = (math.degrees(wrap(math.atan2(b1[1] - b0[1], b1[0] - b0[0]) - prof["direction"]))
+                if dist > 0.02 else float("nan"))
+        rec, rt = "", ""
+        if fell or self.is_fallen():
+            ok, t, _ = self.recover()
+            rec, rt = ok, round(t, 2)
+        label = "Shoot.motion" if USE_BUILTIN_SHOOT else prof["kind"]
+        w.writerow([label, strength, trial, round(speed, 3), round(dist, 3), round(derr, 1),
+                    fell, rec, rt])
+        print(f"{label} kick, strength {strength} trial {trial}: {speed:.2f} m/s, {dist:.2f} m, "
+              f"direction error {derr:.1f} deg, fell {fell}")
+
     def run_kick_test(self):
+        """Sweep the strength of one kick type (kick=... option, default KICK_TYPE)."""
         self.stand(1.0)
-        f, w = self.csv_writer("kick_test.csv",
-                               ["kick", "strength", "trial", "peak_speed_mps", "distance_m",
-                                "direction_error_deg", "fell", "recovered", "recovery_s"])
-        side = -1.0 if KICK_FOOT == "R" else 1.0
-        labels = ["builtin"] if USE_BUILTIN_SHOOT else STRENGTHS
-        for s in labels:
+        f, w = self.csv_writer("kick_test.csv", self.KICK_CSV_HEADER)
+        strengths = [0] if USE_BUILTIN_SHOOT else STRENGTHS
+        for s in strengths:
             for trial in range(1, KICKS_PER_STRENGTH + 1):
-                self.reset_robot(0, 0, 0)
-                self.place_ball(BALL_X, side * BALL_Y)
-                b0 = self.ball_pos()
-                speed, fell = self.kick(strength=0 if s == "builtin" else s)
-                self.step(3.0)                               # let the ball roll
-                b1 = self.ball_pos()
-                dist = math.hypot(b1[0] - b0[0], b1[1] - b0[1])
-                derr = math.degrees(math.atan2(b1[1] - b0[1], b1[0] - b0[0])) if dist > 0.02 else float("nan")
-                rec, rt = "", ""
-                if fell or self.is_fallen():
-                    ok, t, _ = self.recover()
-                    rec, rt = ok, round(t, 2)
-                w.writerow(["custom" if s != "builtin" else "Shoot.motion", s, trial,
-                            round(speed, 3), round(dist, 3), round(derr, 1),
-                            fell, rec, rt])
+                self._kick_trial(self.kick_type, s, trial, w)
                 f.flush()
-                print(f"strength {s} trial {trial}: {speed:.2f} m/s, {dist:.2f} m, "
-                      f"direction {derr:.1f} deg, fell {fell}")
         f.close()
         print("Kick test finished.")
+
+    def run_kick_compare(self):
+        """Every kick type at its own strength, KICK_COMPARE_TRIALS times each."""
+        self.stand(1.0)
+        f, w = self.csv_writer("kick_compare.csv", self.KICK_CSV_HEADER)
+        for kind, prof in KICK_TYPES.items():
+            for trial in range(1, KICK_COMPARE_TRIALS + 1):
+                self._kick_trial(kind, prof["strength"], trial, w)
+                f.flush()
+        f.close()
+        print("Kick compare finished.")
 
     def run_getup_test(self):
         f, w = self.csv_writer("getup_test.csv", ["trial", "success", "time_s", "attempts"])
@@ -233,7 +274,10 @@ class NaoKickRecovery(RecoveryMixin, KickingMixin, WalkingMixin):
 
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "play"
-    nao = NaoKickRecovery()
-    {"play": nao.run_play, "kick_test": nao.run_kick_test,
+    args = sys.argv[1:]
+    mode = next((a for a in args if "=" not in a), "play")
+    opts = dict(a.split("=", 1) for a in args if "=" in a)
+    nao = NaoKickRecovery(attack=opts.get("attack", "right"), kick_type=opts.get("kick", KICK_TYPE))
+    print(f"Mode {mode}: attacking the {opts.get('attack', 'right')} goal, {nao.kick_type} kick")
+    {"play": nao.run_play, "kick_test": nao.run_kick_test, "kick_compare": nao.run_kick_compare,
      "getup_test": nao.run_getup_test, "sensor_check": nao.run_sensor_check}.get(mode, nao.run_play)()

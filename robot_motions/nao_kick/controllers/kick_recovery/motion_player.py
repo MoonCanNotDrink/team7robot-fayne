@@ -6,6 +6,8 @@ pose, and call a check function every step (for fall detection).
 """
 import math
 
+OFFSET_FADE_S = 0.25         # time for leftover balance offsets to fade out
+
 
 def load_motion_file(path):
     """Read a Webots .motion file into (joints, [(time_s, {joint: angle})])."""
@@ -58,6 +60,7 @@ class MotionPlayer:
         self.dt = time_step_ms / 1000.0
         self.ts = time_step_ms
         self.target = {}
+        self.offsets = {}           # balance offsets currently added on top of target
         self.frame_index = 0
         self.limits = {}
         for name, m in motors.items():
@@ -84,7 +87,7 @@ class MotionPlayer:
             pose[name] = val
         return pose
 
-    def play(self, sequence, check=None, from_sensors=False, ease=True):
+    def play(self, sequence, check=None, from_sensors=False, ease=True, feedback=None):
         """Play a keyframe sequence.
 
         ease=True eases in and out of every keyframe (good for hand-made poses);
@@ -92,12 +95,21 @@ class MotionPlayer:
         keeps the joints moving through the frames of a recorded motion such
         as a walk.
 
+        feedback() (e.g. a balance.Balancer) is called every step and returns
+        {joint: offset} added on top of the interpolated pose. Offsets left
+        over from a previous call fade out over OFFSET_FADE_S instead of
+        jumping, so switching between balanced and plain motions is smooth.
+
         check() is called every step; if it returns True the motion stops
         and play() returns 'aborted'. Returns 'done', or 'quit' when the
         simulation ends.
         """
         if from_sensors or not self.target:
             self.target = self.current_pose()
+            self.offsets = {}
+        residual = dict(self.offsets)
+        fade_n = max(1, int(round(OFFSET_FADE_S / self.dt)))
+        steps = 0
         for self.frame_index, (duration, pose) in enumerate(sequence):
             start = dict(self.target)
             end = dict(start)
@@ -107,17 +119,29 @@ class MotionPlayer:
             n = max(1, int(round(duration / self.dt)))
             for k in range(1, n + 1):
                 a = 0.5 - 0.5 * math.cos(math.pi * k / n) if ease else k / n
+                steps += 1
+                if feedback is not None:
+                    offs = feedback() or {}
+                elif residual and steps <= fade_n:
+                    f = 1.0 - steps / fade_n
+                    offs = {j: f * v for j, v in residual.items()}
+                else:
+                    offs = {}
+                self.offsets = offs
                 for name in end:
                     v = start[name] + a * (end[name] - start[name])
+                    if name in offs:
+                        v = self._clamp(name, v + offs[name])
                     if v == v:                                  # never send NaN to a motor
                         self.motors[name].setPosition(v)
                 if self.robot.step(self.ts) == -1:
                     return "quit"
                 if check is not None and check():
                     self.target = self.current_pose()
+                    self.offsets = {}
                     return "aborted"
             self.target = end
         return "done"
 
-    def hold(self, seconds, check=None):
-        return self.play([(seconds, {})], check=check)
+    def hold(self, seconds, check=None, feedback=None):
+        return self.play([(seconds, {})], check=check, feedback=feedback)

@@ -9,6 +9,15 @@ from settings import *  # shared walking and heading tuning values
 
 
 class WalkingMixin:
+    def double_support(self):
+        """True when both feet carry weight (foot sensors), or, without them,
+        when both knees are bent about the same (neither leg is swinging)."""
+        share = self.feet.share("L")
+        if share is not None:
+            return 0.3 < share < 0.7
+        pose = self.player.current_pose()
+        return abs(pose.get("LKneePitch", 0.0) - pose.get("RKneePitch", 0.0)) < 0.1
+
     def play_until(self, name, done, max_time=12.0, speed=None):
         """Loop a walking motion until done() is True, then return to the stand pose.
 
@@ -23,14 +32,19 @@ class WalkingMixin:
         self._tilt_steps = 0
         t_end = self.robot.getTime() + max_time
         reached = [False]
+        reached_at = [None]
 
         def check():
             if self.fall_check():
                 return True
-            if done():
+            now = self.robot.getTime()
+            if reached_at[0] is None and done():
                 reached[0] = True
-                return True
-            return self.robot.getTime() > t_end
+                reached_at[0] = now
+            if reached_at[0] is not None:
+                # do not stop with a foot in the air: wait for both feet down
+                return self.double_support() or now - reached_at[0] > WALK_STOP_MAX_S
+            return now > t_end
 
         is_turn = name.startswith("Turn")
         if speed is None:
@@ -53,8 +67,9 @@ class WalkingMixin:
             elif not is_turn and self.walk_speed > 1.0:
                 self.walk_speed = max(1.0, self.walk_speed - WALK_SPEED_STEP)
                 print(f"  fell while walking: walk speed-up lowered to {self.walk_speed:.1f}")
+            self.brace_for_fall()
             return "fallen"
-        self.player.play([(0.35, poses.STAND)], check=self.fall_check)
+        self.stand(0.5)
         result = "done" if reached[0] else "timeout"
         x, y, yaw = self.robot_pose()
         print(f"  {name:13s} -> {result:7s} robot at ({x:5.2f}, {y:5.2f}) facing {math.degrees(yaw):6.1f} deg")
