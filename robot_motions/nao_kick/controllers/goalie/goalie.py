@@ -5,6 +5,11 @@ where it will cross the goal line, sidesteps toward that intercept, then kicks
 the ball away when it is close or blocks it otherwise. This is ground-truth
 simulation sensing; it does not use the camera.
 
+Falls: every motion is watched by the same fall check as the field players.
+When the goalie falls it braces, gets up with the shared RecoveryMixin
+(kick_recovery/recovery.py), turns back to face the field and returns to the
+ready stance.
+
 controllerArgs: "right" (default) defends the goal at x = +4.5 and faces -x;
 "left" defends the goal at x = -4.5 and faces +x.
 """
@@ -14,10 +19,13 @@ import sys
 
 from controller import Supervisor
 
+# Share the field players' motion, balance and recovery code.
 sys.path.insert(0, os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..")))
-from kick_recovery.motion_player import (
-    MotionPlayer, load_motion_file, motion_to_sequence)
+    os.path.join(os.path.dirname(__file__), "..", "kick_recovery")))
+import poses  # noqa: E402
+from balance import Balancer  # noqa: E402
+from motion_player import MotionPlayer, load_motion_file, motion_to_sequence  # noqa: E402
+from recovery import RecoveryMixin  # noqa: E402
 
 
 GOAL_LINE_X = 4.0           # distance of the goalie's line from the centre (m)
@@ -27,10 +35,19 @@ MIN_TOWARD_SPEED = 0.12
 STEP_MS = 20
 LATERAL_TOLERANCE = 0.20
 KICK_RANGE = 0.45
-SIDE_STEP_TIME_SCALE = 0.65  # lower values play the recorded step faster
-BLOCK_TRANSITION_TIME = 0.10
+# Side steps were played at time scale 0.65 (about 1.5x the recorded speed) and the
+# goalie fell over. 1.0 is the recorded speed; lower is faster but less stable.
+SIDE_STEP_TIME_SCALE = 1.0  # TUNE
+SIDE_STEP_WIDTH = 0.9       # scales hip AND ankle roll together so the sole lands flat
+MAX_STEPS_PER_SAVE = 8      # never side-step forever (e.g. if the steps make no progress)
+BLOCK_TRANSITION_TIME = 0.25  # TUNE was 0.10: snapping into the lean knocked the goalie over
+BLOCK_HOLD_TIME = 0.65
+READY_TRANSITION_TIME = 0.30
+HEADING_TOL = math.radians(20)  # re-face the field after a get-up if further off than this
 SIDE_STEP_MOTIONS = ("SideStepLeft", "SideStepRight")
-GOALIE_MOTIONS = (*SIDE_STEP_MOTIONS, "Shoot")
+TURN_MOTIONS = ("TurnLeft40", "TurnRight40")
+GET_UP_MOTIONS = ("GetUpBack", "GetUpFront", "GetUpSide", "StandUpFromFront")
+GOALIE_MOTIONS = (*SIDE_STEP_MOTIONS, "Shoot", *TURN_MOTIONS, *GET_UP_MOTIONS)
 
 READY = {
     "HeadYaw": 0.0, "HeadPitch": -0.12,
@@ -44,12 +61,16 @@ READY = {
     "RKneePitch": 0.84, "RAnklePitch": -0.42, "RAnkleRoll": 0.0,
 }
 
+BLOCK_LEAN = 0.15           # TUNE hip roll of the block lean (was 0.18 hip / 0.12 ankle)
+
 
 def block_pose(world_y, goal=1.0):
     """Make a wide, low block and lean toward the predicted world-space y.
 
     goal is +1 for the right goal (goalie faces -x) and -1 for the left goal
-    (goalie faces +x)."""
+    (goalie faces +x). Hip and ankle roll are equal and opposite, so the lean
+    moves the body sideways while both soles stay flat on the ground.
+    """
     # Facing -x the goalie's local left/right is reversed in world y; facing +x it is not.
     local_y = -goal * world_y
     side = 1.0 if local_y > 0 else -1.0
@@ -60,14 +81,14 @@ def block_pose(world_y, goal=1.0):
         "LElbowYaw": -1.25, "LElbowRoll": -0.95,
         "RShoulderPitch": 0.55, "RShoulderRoll": -0.85,
         "RElbowYaw": 1.25, "RElbowRoll": 0.95,
-        "LHipRoll": side * 0.18, "RHipRoll": side * 0.18,
-        "LAnkleRoll": -side * 0.12, "RAnkleRoll": -side * 0.12,
+        "LHipRoll": side * BLOCK_LEAN, "RHipRoll": side * BLOCK_LEAN,
+        "LAnkleRoll": -side * BLOCK_LEAN, "RAnkleRoll": -side * BLOCK_LEAN,
         "LKneePitch": 1.0, "RKneePitch": 1.0,
     })
     return pose
 
 
-class Goalie:
+class Goalie(RecoveryMixin):
     def __init__(self, goal_side="right"):
         self.goal = -1.0 if goal_side == "left" else 1.0     # +1: right goal, -1: left goal
         self.line_x = self.goal * GOAL_LINE_X
@@ -92,18 +113,11 @@ class Goalie:
             if sensor is not None:
                 sensor.enable(self.ts)
                 self.sensors[name] = sensor
-        if self.robot.step(self.ts) == -1:
-            return
-        self.current = {}
-        for name, motor in self.motors.items():
-            sensor = self.sensors.get(name)
-            value = sensor.getValue() if sensor else 0.0
-            if not math.isfinite(value):
-                value = 0.0
-            self.current[name] = value
-            motor.setPosition(value)
+        self.robot.step(self.ts)            # sensors hold real values after one step
         self.player = MotionPlayer(self.robot, self.motors, self.sensors, self.ts)
-        self.player.target = dict(self.current)
+        self.player.target = self.player.current_pose()
+        self._tilt_steps = 0                # state for RecoveryMixin.fall_check
+        self._prev_uz = (1.0, self.robot.getTime())
         print(f"Goalie active: tracking simulated ball and defending {goal_side} goal.")
 
     def _load_motions(self):
@@ -112,6 +126,7 @@ class Goalie:
         directories = [
             os.path.abspath(os.path.join(here, "..", "..", "motions")),
             os.path.join(webots_home, "projects", "robots", "softbank", "nao", "motions"),
+            r"C:\Program Files\Webots\projects\robots\softbank\nao\motions",
             "/usr/local/webots/projects/robots/softbank/nao/motions",
         ]
         motions = {}
@@ -124,8 +139,92 @@ class Goalie:
         missing = [name for name in GOALIE_MOTIONS if name not in motions]
         if missing:
             print("Goalie motions unavailable:", ", ".join(missing),
-                  "- side-stepping or kicking will be skipped when unavailable.")
+                  "- those moves (or get-ups) will be skipped.")
         return motions
+
+    # ------------------------------------------------------------ helpers used by RecoveryMixin
+    def step(self, seconds=None):
+        n = 1 if seconds is None else max(1, int(seconds * 1000 / self.ts))
+        for _ in range(n):
+            if self.robot.step(self.ts) == -1:
+                sys.exit(0)
+
+    def stand(self, duration=1.0):
+        bal = Balancer(self)
+        bal.base_p = bal.base_r = 0.0
+        self._tilt_steps = 0
+        return self.player.play([(duration, poses.STAND)], check=self.fall_check, feedback=bal)
+
+    def play_motion(self, name, time_scale=1.0, stop_after=None, abort_on_fall=True):
+        """Play a .motion file; returns 'done', 'aborted', 'quit' or 'missing'.
+        Get-up motions are played with abort_on_fall=False."""
+        if name not in self.motions:
+            print("Goalie motion not available:", name)
+            return "missing"
+        self._tilt_steps = 0
+        seq = motion_to_sequence(self.motions[name], time_scale, blend_in=0.3,
+                                 stop_after=stop_after)
+        res = self.player.play(seq, check=self.fall_check if abort_on_fall else None,
+                               ease=False)
+        if res == "aborted" and abort_on_fall:
+            self.brace_for_fall()
+        return res
+
+    # ------------------------------------------------------------ goalie moves
+    def move_to(self, pose, duration):
+        """Blend to a pose with balance control; 'done', 'aborted' (fell) or 'quit'."""
+        bal = Balancer(self)
+        bal.base_p = bal.base_r = 0.0
+        self._tilt_steps = 0
+        res = self.player.play([(duration, pose)], check=self.fall_check, feedback=bal)
+        if res == "aborted":
+            self.brace_for_fall()
+        return res
+
+    def side_step(self, name):
+        """One complete side-step clip at a stable speed, roll scaled so the sole lands flat."""
+        if name not in self.motions:
+            return "missing"
+        seq = motion_to_sequence(self.motions[name], time_scale=SIDE_STEP_TIME_SCALE,
+                                 blend_in=0.3)
+        for _, pose in seq:
+            for joint in ("LHipRoll", "RHipRoll", "LAnkleRoll", "RAnkleRoll"):
+                if joint in pose:
+                    pose[joint] *= SIDE_STEP_WIDTH
+        self._tilt_steps = 0
+        res = self.player.play(seq, check=self.fall_check, ease=False)
+        if res == "aborted":
+            self.brace_for_fall()
+        return res
+
+    def heading(self):
+        R = self.me.getOrientation()
+        return math.atan2(R[3], R[0])
+
+    def face_field(self):
+        """After a get-up the robot can face anywhere: turn back to face the field."""
+        want = math.pi if self.goal > 0 else 0.0
+        for _ in range(8):
+            err = math.atan2(math.sin(want - self.heading()), math.cos(want - self.heading()))
+            if abs(err) <= HEADING_TOL:
+                return "done"
+            res = self.play_motion("TurnLeft40" if err > 0 else "TurnRight40")
+            if res != "done":
+                return res
+        return "done"
+
+    def get_up(self):
+        """Recover from a fall, face the field again and take the ready stance.
+        Returns True when the goalie is back up."""
+        print("Goalie is down: getting up.")
+        ok, seconds, attempts = self.recover()
+        print(f"Goalie get-up: {'success' if ok else 'failed'} in {seconds:.1f} s "
+              f"({attempts} attempts)")
+        if not ok:
+            return False
+        if self.face_field() != "done":
+            return not self.is_fallen()
+        return self.move_to(READY, READY_TRANSITION_TIME) == "done"
 
     def ball_intercept(self):
         """Return predicted y and arrival time for a ball approaching the goal."""
@@ -143,50 +242,29 @@ class Goalie:
             return None
         return y, seconds
 
-    def move_to(self, pose, duration):
-        start = dict(self.current)
-        steps = max(1, int(duration * 1000 / self.ts))
-        for k in range(1, steps + 1):
-            alpha = 0.5 - 0.5 * math.cos(math.pi * k / steps)
-            for name, motor in self.motors.items():
-                target = pose.get(name, start[name])
-                value = start[name] + alpha * (target - start[name])
-                motor.setPosition(value)
-            if self.robot.step(self.ts) == -1:
-                return False
-        for name in self.current:
-            self.current[name] = pose.get(name, start[name])
-        self.player.target = dict(self.current)
-        return True
-
-    def play_motion(self, name, time_scale=1.0):
-        """Play a recorded NAO motion and keep the tracked pose in sync."""
-        frames = self.motions.get(name)
-        if not frames:
-            return False
-        sequence = motion_to_sequence(frames, time_scale=time_scale, blend_in=0.2)
-        result = self.player.play(sequence, ease=False)
-        self.current = dict(self.player.target)
-        return result == "done"
-
     def move_laterally_to(self, target_y, arrival):
-        """Use complete side-step clips toward the detected ball intercept."""
-        while abs(target_y - self.me.getPosition()[1]) > LATERAL_TOLERANCE:
+        """Use complete side-step clips toward the detected ball intercept.
+        Returns (target_y, arrival, status) with status 'done', 'fallen' or 'quit'."""
+        for _ in range(MAX_STEPS_PER_SAVE):
             delta_y = target_y - self.me.getPosition()[1]
+            if abs(delta_y) <= LATERAL_TOLERANCE:
+                break
             # Facing -x (right goal) world +y is the goalie's right; facing +x it is its left.
             motion = "SideStepRight" if delta_y * self.goal > 0 else "SideStepLeft"
-            frames = self.motions.get(motion)
-            if not frames:
-                break
             print(f"Goalie sidestepping {'right' if motion == 'SideStepRight' else 'left'} "
                   f"toward y={target_y:.2f} m.")
-            if not self.play_motion(motion, time_scale=SIDE_STEP_TIME_SCALE):
-                return target_y, arrival, False
+            res = self.side_step(motion)
+            if res == "quit":
+                return target_y, arrival, "quit"
+            if res == "aborted" or self.is_fallen():
+                return target_y, arrival, "fallen"
+            if res == "missing":
+                break
             intercept = self.ball_intercept()
             if intercept is None:
                 break
             target_y, arrival = intercept
-        return target_y, arrival, True
+        return target_y, arrival, "done"
 
     def can_kick_back(self, arrival):
         """Kick a low incoming ball only when it is within the striker's reach."""
@@ -202,32 +280,41 @@ class Goalie:
     def run(self):
         ready = False
         blocking_until = 0.0
-        self.move_to(READY, 0.25)
+        if self.move_to(READY, READY_TRANSITION_TIME) == "quit":
+            return
         while self.robot.step(self.ts) != -1:
+            # Down (e.g. hit by the ball or a player): get up before anything else.
+            if self.fall_check() or self.is_fallen():
+                self.get_up()
+                ready = False
+                continue
             now = self.robot.getTime()
             intercept = self.ball_intercept()
             if intercept is not None and now >= blocking_until:
                 y, arrival = intercept
-                y, arrival, motion_ok = self.move_laterally_to(y, arrival)
-                if not motion_ok:
+                y, arrival, status = self.move_laterally_to(y, arrival)
+                if status == "quit":
                     break
+                if status == "fallen":
+                    continue                        # the next loop gets up
                 if self.can_kick_back(arrival):
                     print(f"Ball close: kicking it back (arrives in {arrival:.2f}s).")
-                    if not self.play_motion("Shoot"):
-                        break
+                    res = self.play_motion("Shoot")
                 else:
                     side = ("right" if self.goal * (y - self.me.getPosition()[1]) >= 0
                             else "left")
                     print(f"Ball detected, blocking to {side} "
                           f"(arrives in {arrival:.2f}s).")
-                    if not self.move_to(block_pose(y, self.goal), BLOCK_TRANSITION_TIME):
-                        break
-                blocking_until = self.robot.getTime() + 0.65
+                    res = self.move_to(block_pose(y, self.goal), BLOCK_TRANSITION_TIME)
+                if res == "quit":
+                    break
+                blocking_until = self.robot.getTime() + BLOCK_HOLD_TIME
                 ready = False
             elif now >= blocking_until and not ready:
-                if not self.move_to(READY, 0.20):
+                res = self.move_to(READY, READY_TRANSITION_TIME)
+                if res == "quit":
                     break
-                ready = True
+                ready = res == "done"
 
 
 if __name__ == "__main__":

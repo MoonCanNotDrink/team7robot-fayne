@@ -93,6 +93,14 @@ spreads its arms and leans toward the intercept to block. The controller command
 speeds and uses shorter transitions for the block and ready poses. It returns
 to a ready stance after the save. This uses Supervisor ground-truth state, not
 camera vision.
+
+Goalie falls: side steps play at the recorded speed (`SIDE_STEP_TIME_SCALE = 1.0`;
+0.65 made it fall) with hip and ankle roll scaled together (`SIDE_STEP_WIDTH`), and the
+block lean is reached in `BLOCK_TRANSITION_TIME = 0.25` s with equal and opposite
+hip/ankle roll so the soles stay flat. Every goalie move runs the field players'
+fall check; on a fall the goalie braces, gets up with `RecoveryMixin.recover()`
+(shared with `kick_recovery`), turns back to face the field and returns to the
+ready stance. It does not walk back to the goal line yet if a fall moved it.
 The world has a 9 m x 6 m marked playing area on 11 m x 8 m turf.
 Both goals are 2.8 m wide overall (2.6 m clear between the posts), 1.2 m high,
 and use 0.1 m square posts and crossbar, matching `kidsize_pitch.wbt`.
