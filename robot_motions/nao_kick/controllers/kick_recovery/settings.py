@@ -45,6 +45,18 @@ BAL_KD_ANKLE = 0.08         # TUNE damping on the lean rate
 BAL_KP_HIP = 0.5            # TUNE rad of hip correction per unit of lean
 BAL_MAX = 0.35              # largest correction allowed (rad)
 
+# Get-up clips (RecoveryMixin.recover, used by field players and the goalie):
+#   front: Webots' StandUpFromFront (GetUpFront ends in a head-down pike and falls flat)
+#   back:  GetUpBack (poses.rollover_sequence never rolled the robot onto its front)
+#   side:  GetUpSide, then the clip for whichever side it ends on
+# StandUpFromFront and GetUpBack bring the robot upright and then let it keep rotating
+# backwards onto its back. So from the "rise" (feet under the body) to the end of the
+# clip it is played slower, leaned forwards and balance-controlled.
+GETUP_RISE = {"StandUpFromFront": 2.6, "GetUpBack": 4.0}  # clip time (s) where the rise starts
+GETUP_TAIL_STRETCH = 3.0    # TUNE play the rise this many times slower
+GETUP_LEAN = 0.10           # TUNE rad added forwards to Ankle/HipPitch during the rise
+RISE_BALANCE_GAIN = 1.0     # TUNE balance.Balancer gain during the rise (0 = off)
+
 # Kick types. Pick one with controllerArgs "kick=slow|normal|fast|side" (default KICK_TYPE).
 #   strength   0..1: back-swing size and swing speed
 #   tempo      scales the back-swing and swing-through only (< 1 faster, > 1 slower); the weight
@@ -65,7 +77,7 @@ STRENGTHS = [0.2, 0.4, 0.6, 0.8, 1.0]
 KICK_COMPARE_TRIALS = 3     # kicks per type in kick_compare mode
 KICKS_PER_STRENGTH = 3
 GETUP_TRIALS = 10
-MAX_GETUP_ATTEMPTS = 3
+MAX_GETUP_ATTEMPTS = 4
 
 KICK_PHASES = ["stand", "weight shift", "hold", "lift foot", "back-swing", "swing",
                "hold", "retract", "put foot down", "hold", "re-centre", "hold"]
