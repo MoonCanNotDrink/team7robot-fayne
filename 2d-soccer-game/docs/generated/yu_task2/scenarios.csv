@@ -1,0 +1,11 @@
+name,kind,expected,predOpen,reason,keeperOut,slack,openFrac,nominal,pMC,pBest,agree
+"S1 clear goal, keeper on line",shot,"open",1,0,0,0.172841728731807,0.333333333333333,1,0.926,0.925,1
+"S2 keeper off its line",shot,"open",1,0,1,0.959882115367211,0.777777777777778,1,1,1,1
+"S3 field-player blocker",shot,"blocked (field player)",0,3,0,-0.104269954630033,0,0,0.228,0.27,1
+"S4 keeper blocks narrow angle",shot,"blocked (keeper)",0,2,0,-0.083498929609393,0,1,0.603,0.63,1
+"S5a threshold, blocker 3 cm outside",shot,"open (just)",1,0,0,0.03,0.111111111111111,1,0.883,0.895,1
+"S5b threshold, blocker 3 cm inside",shot,"blocked (just)",0,3,0,-0.03,0,1,0.774,0.775,1
+"S6 lane clear but out of range",shot,"blocked (range)",0,1,0,-0.187961604991981,0,0,0,0,1
+"S7 keeper out, defender blocks",shot,"blocked (field player), keeper out",0,3,1,-0.104269954630033,0,0,0.228,0.27,1
+"S8 pass, receiver available",pass,"open",1,0,0,1.43010969384763,NaN,1,1,0.613,1
+"S9 pass blocked",pass,"blocked (opponent)",0,3,0,-0.363133547913025,NaN,0,0.066,0,1
