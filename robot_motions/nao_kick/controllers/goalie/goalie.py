@@ -6,8 +6,9 @@ the ball away when it is close or blocks it otherwise. This is ground-truth
 simulation sensing; it does not use the camera.
 
 Falls: every motion is watched by the same fall check as the field players.
-When the goalie falls it braces, gets up with the shared RecoveryMixin
-(kick_recovery/recovery.py), turns back to face the field and returns to the
+When the goalie falls it braces, gets up (recover_goalie: StandUpFromFront,
+GetUpBack or GetUpSide with a slowed, balanced rise, then the shared
+RecoveryMixin.balanced_stand), turns back to face the field and returns to the
 ready stance.
 
 controllerArgs: "right" (default) defends the goal at x = +4.5 and faces -x;
@@ -26,6 +27,7 @@ import poses  # noqa: E402
 from balance import Balancer  # noqa: E402
 from motion_player import MotionPlayer, load_motion_file, motion_to_sequence  # noqa: E402
 from recovery import RecoveryMixin  # noqa: E402
+from settings import UPRIGHT_MIN  # noqa: E402
 
 
 GOAL_LINE_X = 4.0           # distance of the goalie's line from the centre (m)
@@ -44,6 +46,20 @@ BLOCK_TRANSITION_TIME = 0.25  # TUNE was 0.10: snapping into the lean knocked th
 BLOCK_HOLD_TIME = 0.65
 READY_TRANSITION_TIME = 0.30
 HEADING_TOL = math.radians(20)  # re-face the field after a get-up if further off than this
+# Get-up (tested in Webots, see README). Which clip for which lying position:
+#   front: Webots' StandUpFromFront (GetUpFront ends in a head-down pike and falls flat)
+#   back:  GetUpBack (poses.rollover_sequence never rolled the goalie onto its front)
+#   side:  GetUpSide, then the clip for whichever side it ends on
+# Both StandUpFromFront and GetUpBack bring the goalie upright and then let it keep
+# rotating backwards until it lands on its back. So from the "rise" (feet under the
+# body) to the end of the clip the goalie plays the clip GETUP_TAIL_STRETCH times
+# slower, leans GETUP_LEAN forwards and runs the Balancer. In 24 trials this got the
+# goalie up within 45 s 13 times (front 4/8, back 7/8, side 2/8) against ~1 in 10 before.
+GETUP_RISE = {"StandUpFromFront": 2.6, "GetUpBack": 4.0}  # clip time (s) where the rise starts
+GETUP_TAIL_STRETCH = 3.0       # TUNE play the rise this many times slower
+GETUP_LEAN = 0.10              # TUNE rad added forwards to Ankle/HipPitch during the rise
+RISE_BALANCE_GAIN = 1.0        # TUNE Balancer gain during the rise (0 = off)
+MAX_GOALIE_GETUP_ATTEMPTS = 4
 SIDE_STEP_MOTIONS = ("SideStepLeft", "SideStepRight")
 TURN_MOTIONS = ("TurnLeft40", "TurnRight40")
 GET_UP_MOTIONS = ("GetUpBack", "GetUpFront", "GetUpSide", "StandUpFromFront")
@@ -213,11 +229,85 @@ class Goalie(RecoveryMixin):
                 return res
         return "done"
 
+    def play_getup(self, name, mirror=False):
+        """Play a get-up clip without fall aborts. For clips in GETUP_RISE the part
+        from the rise to the end is slowed, leaned forwards and balance-controlled."""
+        frames = self.motions[name]
+        seq = motion_to_sequence(frames, blend_in=0.3)
+        if mirror:
+            seq = poses.mirror_sequence(seq)
+        print(f"  playing {name}.motion{' (mirrored)' if mirror else ''}")
+        rise = GETUP_RISE.get(name)
+        if rise is None:
+            return self.player.play(seq, ease=False)
+        split = next((i for i, (t, _) in enumerate(frames) if i > 0 and t > rise), len(seq))
+        res = self.player.play(seq[:split], ease=False)
+        if res == "quit" or split >= len(seq):
+            return res
+        tail = []
+        for d, pose in seq[split:]:
+            pose = dict(pose)
+            for leg in "LR":
+                for joint in ("AnklePitch", "HipPitch"):
+                    j = leg + joint
+                    if j in pose:
+                        pose[j] -= GETUP_LEAN           # more negative = forwards
+            tail.append((d * GETUP_TAIL_STRETCH, pose))
+        bal = None
+        if RISE_BALANCE_GAIN > 0:
+            bal = Balancer(self, gain=RISE_BALANCE_GAIN)
+            bal.base_p = bal.base_r = 0.0               # balance towards upright
+        return self.player.play(tail, ease=False, feedback=bal)
+
+    def recover_goalie(self):
+        """Get up from any fall. Returns (success, seconds taken, attempts).
+
+        side  -> GetUpSide (mirrored when lying on the other side), then as below
+        back  -> GetUpBack
+        front -> StandUpFromFront
+        then RecoveryMixin.balanced_stand into the stand pose, as the field players do.
+        """
+        t0 = self.robot.getTime()
+        self.step(0.5)
+        if self.lying_state() == "up":
+            return True, self.robot.getTime() - t0, 0
+        for attempt in range(1, MAX_GOALIE_GETUP_ATTEMPTS + 1):
+            state = self.lying_state()
+            fz, lz, uz = self.torso_axes()
+            print(f"  get-up attempt {attempt}: lying on {state} "
+                  f"(torso forward_z={fz:.2f}, left_z={lz:.2f}, up_z={uz:.2f})")
+            if state == "up":
+                return True, self.robot.getTime() - t0, attempt - 1
+            if state == "side" and "GetUpSide" in self.motions:
+                # The clip is authored for lying on the right side (left axis up).
+                self.play_getup("GetUpSide", mirror=lz < 0)
+                self.step(0.3)
+                state = self.lying_state()
+                print(f"  side clip ended on {state}")
+            if state in ("back", "side") and "GetUpBack" in self.motions:
+                self.play_getup("GetUpBack")
+            elif state == "front":
+                name = "StandUpFromFront" if "StandUpFromFront" in self.motions else "GetUpFront"
+                if name not in self.motions:
+                    print("  no front get-up motion available")
+                    break
+                self.play_getup(name)
+            self.step(0.3)
+            if self.torso_axes()[2] > UPRIGHT_MIN:
+                if self.balanced_stand():
+                    self.step(1.0)
+                    if self.lying_state() == "up":
+                        return True, self.robot.getTime() - t0, attempt
+                print("  lost balance after getting up, trying again")
+            else:
+                print(f"  still down after the clip ({self.lying_state()})")
+        return False, self.robot.getTime() - t0, MAX_GOALIE_GETUP_ATTEMPTS
+
     def get_up(self):
         """Recover from a fall, face the field again and take the ready stance.
         Returns True when the goalie is back up."""
         print("Goalie is down: getting up.")
-        ok, seconds, attempts = self.recover()
+        ok, seconds, attempts = self.recover_goalie()
         print(f"Goalie get-up: {'success' if ok else 'failed'} in {seconds:.1f} s "
               f"({attempts} attempts)")
         if not ok:

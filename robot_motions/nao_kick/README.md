@@ -98,9 +98,27 @@ Goalie falls: side steps play at the recorded speed (`SIDE_STEP_TIME_SCALE = 1.0
 0.65 made it fall) with hip and ankle roll scaled together (`SIDE_STEP_WIDTH`), and the
 block lean is reached in `BLOCK_TRANSITION_TIME = 0.25` s with equal and opposite
 hip/ankle roll so the soles stay flat. Every goalie move runs the field players'
-fall check; on a fall the goalie braces, gets up with `RecoveryMixin.recover()`
-(shared with `kick_recovery`), turns back to face the field and returns to the
-ready stance. It does not walk back to the goal line yet if a fall moved it.
+fall check; on a fall the goalie braces, gets up (`Goalie.recover_goalie`), turns
+back to face the field and returns to the ready stance. It does not walk back to
+the goal line yet if a fall moved it.
+
+Goalie get-up (tested in Webots by laying the goalie down 8 times each on its
+front, back and side, 45 s limit per try):
+- front: Webots' `StandUpFromFront.motion`. `GetUpFront` ends in a head-down pike
+  and falls flat again.
+- back: `GetUpBack.motion`. Rolling onto the front with `poses.rollover_sequence`
+  never worked for the goalie.
+- side: `GetUpSide.motion` (mirrored for the other side), then the clip for
+  whichever side it ends on.
+- Both `StandUpFromFront` and `GetUpBack` bring the robot upright and then let it
+  keep rotating backwards onto its back. So from the "rise" (`GETUP_RISE`, feet
+  under the body) to the end of the clip the goalie plays it `GETUP_TAIL_STRETCH`
+  (3x) slower, leans `GETUP_LEAN` (0.10 rad) forwards on AnklePitch/HipPitch and
+  runs the `Balancer`. Then `balanced_stand()` as for the field players.
+- Result: up within 45 s in 13 of 24 tries (front 4/8, back 7/8, side 2/8), against
+  about 1 in 10 with the previous `RecoveryMixin.recover()` path. The goalie keeps
+  retrying while it is down. Front and side get-ups still fail about half the time:
+  tune `GETUP_TAIL_STRETCH` / `GETUP_LEAN` in `goalie.py` with the same test.
 The world has a 9 m x 6 m marked playing area on 11 m x 8 m turf.
 Both goals are 2.8 m wide overall (2.6 m clear between the posts), 1.2 m high,
 and use 0.1 m square posts and crossbar, matching `kidsize_pitch.wbt`.
