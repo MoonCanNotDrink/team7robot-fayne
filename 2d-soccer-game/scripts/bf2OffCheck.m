@@ -52,9 +52,10 @@ end
 end
 
 function [trace,tactics,passed]=runOne(P)
-[input,~]=matchSimulationInput(P);
-output=sim(input);
-trace=recordRows(output.records);tactics=recordRows(output.tacticsRecords);
+% runMatch seeds the kick-noise stream with P.seed (rng twister), as every
+% reproduction script does; without it the seed has no effect and two runs of
+% the same configuration differ.
+[trace,tactics]=runMatch(P);
 [report,~]=v1MatchMetrics(trace,tactics,P);
 passed=report.passed;
 end

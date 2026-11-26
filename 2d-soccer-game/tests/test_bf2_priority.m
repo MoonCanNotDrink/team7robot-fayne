@@ -669,12 +669,16 @@ function [q,tr,bf] = runFixture(P,world)
 [input,model] = matchSimulationInput(P);
 assert(strcmp(model,'tdpV1Match'));
 input = input.setVariable('world0',world,'Workspace',model);
+saved = rng;cleanup = onCleanup(@()rng(saved)); %#ok<NASGU>
+rng(P.seed,'twister');   % kick noise uses the global stream (as in runMatch)
 output = sim(input);
 q = recordRows(output.tacticsRecords);tr = recordRows(output.records);bf = recordRows(output.bf2Records);
 end
 
 function [q,tr,bf] = runMatchRows(P)
 [input,model] = matchSimulationInput(P);
+saved = rng;cleanup = onCleanup(@()rng(saved)); %#ok<NASGU>
+rng(P.seed,'twister');   % kick noise uses the global stream (as in runMatch)
 output = sim(input);
 q = recordRows(output.tacticsRecords);tr = recordRows(output.records);bf = recordRows(output.bf2Records);
 end
