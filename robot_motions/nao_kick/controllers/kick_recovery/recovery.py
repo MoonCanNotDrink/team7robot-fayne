@@ -4,6 +4,7 @@ import math
 import sys
 
 import poses
+from balance import Balancer
 from motion_player import motion_to_sequence
 from settings import *  # shared motion and balance tuning values
 
@@ -105,65 +106,73 @@ class RecoveryMixin:
         self.player.target = end
         return True
 
+    def play_getup(self, name, mirror=False):
+        """Play a get-up clip without fall aborts. For clips in GETUP_RISE the part
+        from the rise (feet under the body) to the end is played GETUP_TAIL_STRETCH
+        times slower, leaned GETUP_LEAN forwards and balance-controlled, because the
+        clips otherwise let the robot keep rotating backwards onto its back."""
+        frames = self.motions[name]
+        seq = motion_to_sequence(frames, blend_in=0.3)
+        if mirror:
+            seq = poses.mirror_sequence(seq)
+        print(f"  playing {name}.motion{' (mirrored)' if mirror else ''}")
+        rise = GETUP_RISE.get(name)
+        if rise is None:
+            return self.player.play(seq, ease=False)
+        split = next((i for i, (t, _) in enumerate(frames) if i > 0 and t > rise), len(seq))
+        res = self.player.play(seq[:split], ease=False)
+        if res == "quit" or split >= len(seq):
+            return res
+        tail = []
+        for d, pose in seq[split:]:
+            pose = dict(pose)
+            for leg in "LR":
+                for joint in ("AnklePitch", "HipPitch"):
+                    j = leg + joint
+                    if j in pose:
+                        pose[j] -= GETUP_LEAN           # more negative = forwards
+            tail.append((d * GETUP_TAIL_STRETCH, pose))
+        bal = None
+        if RISE_BALANCE_GAIN > 0:
+            bal = Balancer(self, gain=RISE_BALANCE_GAIN)
+            bal.base_p = bal.base_r = 0.0               # balance towards upright
+        return self.player.play(tail, ease=False, feedback=bal)
+
     def recover(self):
         """Get up from any fall. Returns (success, seconds taken, attempts).
 
+        side  -> GetUpSide.motion (mirrored when lying on the other side), then as below
         back  -> GetUpBack.motion (Cyberbotics wrestling)
-        front -> GetUpFront.motion, else Webots' StandUpFromFront.motion
-        side  -> GetUpSide.motion, roll onto the front, then GetUpFront.motion
+        front -> Webots' StandUpFromFront.motion (GetUpFront only if it is missing)
+        then balanced_stand into the stand pose. See settings.py (GETUP_*).
         """
         t0 = self.robot.getTime()
         self.step(0.5)                                   # let the robot settle first
         if self.lying_state() == "up":                   # not actually down: do nothing
             self.stand(0.5)
             return True, self.robot.getTime() - t0, 0
-        roll_side = "L"
         for attempt in range(1, MAX_GETUP_ATTEMPTS + 1):
             state = self.lying_state()
-            side_fall = state == "side"
             fz, lz, uz = self.torso_axes()
             print(f"  get-up attempt {attempt}: lying on {state} "
                   f"(torso forward_z={fz:.2f}, left_z={lz:.2f}, up_z={uz:.2f})")
             if state == "up":
                 return True, self.robot.getTime() - t0, attempt - 1
-            if state == "side":
-                fz, lz, uz = self.torso_axes()
-                if "GetUpSide" in self.motions:
-                    # The authored clip is for the robot lying on its right side;
-                    # mirror it when the torso's left axis points down instead.
-                    print("  playing GetUpSide.motion")
-                    seq = motion_to_sequence(self.motions["GetUpSide"])
-                    if lz < 0:
-                        seq = poses.mirror_sequence(seq)
-                    self.player.play(seq)
-                else:
-                    print("  GetUpSide.motion unavailable; using shoulder push")
-                    pose = {"RShoulderRoll": -1.2} if lz > 0 else {"LShoulderRoll": 1.2}
-                    self.player.play([(0.4, pose), (1.0, {})])
+            if state == "side" and "GetUpSide" in self.motions:
+                # The clip is authored for lying on the right side (left axis up).
+                self.play_getup("GetUpSide", mirror=lz < 0)
                 self.step(0.3)
                 state = self.lying_state()
-                print(f"  side motion ended on {state}")
-                if state == "side":
-                    print("  side roll did not reach the back or front; retrying")
-                    continue
-            if state == "back":
-                if side_fall:
-                    # Side recovery must reach the front before standing. Do not
-                    # start the back get-up if the side roll lands supine.
-                    print("  side motion reached back, not front; retrying side-to-front roll")
-                    continue
-                elif "GetUpBack" in self.motions:
-                    self.play_motion("GetUpBack", abort_on_fall=False)
-                else:
-                    self.player.play(poses.rollover_sequence(roll_side))
-                    self.step(0.5)
-                    roll_side = "R" if roll_side == "L" else "L"
-                    state = self.lying_state()
-            if state == "front":
-                name = "GetUpFront" if "GetUpFront" in self.motions else "StandUpFromFront"
-                if side_fall:
-                    print("  playing front get-up after side roll")
-                self.play_motion(name, abort_on_fall=False)
+                print(f"  side clip ended on {state}")
+            if state in ("back", "side") and "GetUpBack" in self.motions:
+                self.play_getup("GetUpBack")
+            elif state == "front":
+                name = "StandUpFromFront" if "StandUpFromFront" in self.motions else "GetUpFront"
+                if name not in self.motions:
+                    print("  no front get-up motion available")
+                    break
+                self.play_getup(name)
+            self.step(0.3)
             # the critical moment: straight after the get-up the robot is upright but
             # still moving, so settle and balance instead of jumping to the stand pose
             if self.torso_axes()[2] > UPRIGHT_MIN:
@@ -173,6 +182,5 @@ class RecoveryMixin:
                         return True, self.robot.getTime() - t0, attempt
                 print("  lost balance after getting up, trying again")
             else:
-                self.step(0.5)
+                print(f"  still down after the clip ({self.lying_state()})")
         return False, self.robot.getTime() - t0, MAX_GETUP_ATTEMPTS
-
