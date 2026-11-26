@@ -38,6 +38,8 @@ violations = check(violations,'fixedRole',roleChanged);
 mayChase = false(2,4);
 mayChase(:,3:4) = true;
 if isfield(P,'v12Policy'), mayChase = mayChase | P.v12InterceptRole; end
+% B-F3: a receiver may be the DF, MF or ST of a team whose B-F2 priority is on.
+if isfield(P,'bf2Priority'), mayChase(P.bf2Priority>0,2:4) = true; end
 violations = check(violations,'chaserTeamAndRole', ...
     [~ismember(chaser(:,1),[0 find(mayChase(1,:))]) ...
      ~ismember(chaser(:,2),[0 4+find(mayChase(2,:))])]);

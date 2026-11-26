@@ -84,6 +84,24 @@ if isfield(P,'v12Policy')
         all(P.v12CounterDepth>0 & P.v12CounterDepth<P.L/2), ...
         'TDP:V12Config','Tactical target outside the own half.');
 end
+if isfield(P,'bf2Priority')
+    % B-F2 attack priority per team [blue red]: 0 off, 1 Shoot-first, 2 Pass-first.
+    assert(~(isfield(P,'v1AutoRecovery') && P.v1AutoRecovery),'TDP:BF2Config', ...
+        'The B-F2 attack priority runs only in the approved V1 model.');
+    assert(isnumeric(P.bf2Priority) && isequal(size(P.bf2Priority),[1 2]) && ...
+        all(ismember(P.bf2Priority,[0 1 2])),'TDP:BF2Config', ...
+        'bf2Priority must be a 1-by-2 row of 0 (off), 1 (shoot) or 2 (pass).');
+    seconds={'bf2PassMin','bf2PassMax','bf2CommitTimeout','bf2ReceiveTimeout'};
+    for k=1:numel(seconds)
+        value=P.(seconds{k});
+        assert(isnumeric(value) && isreal(value) && isscalar(value) && ...
+            isfinite(value) && value>0,'TDP:BF2Config','Invalid %s.',seconds{k});
+    end
+    assert(P.bf2PassMin<P.bf2PassMax,'TDP:BF2Config','bf2PassMin must be below bf2PassMax.');
+    count=P.bf2SoftTicks;
+    assert(isnumeric(count) && isscalar(count) && count==round(count) && count>=1, ...
+        'TDP:BF2Config','bf2SoftTicks must be a positive integer.');
+end
 names = {'v1UnavailableWindow','v1BlindWindow','v1StaleWindow', ...
     'v1StopWindow','v1RecoveryWindow','v1FailWindow'};
 counts = [8 8 8 1 2 8];

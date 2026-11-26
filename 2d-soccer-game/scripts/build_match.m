@@ -34,7 +34,7 @@ if v1
   add_block('simulink/Discrete/Unit Delay',[n '/HealthMemory'],'InitialCondition','health0','SampleTime','P.dt','Position',[1200 1010 1300 1060]);
   add_block('simulink/Discrete/Unit Delay',[n '/DeviceHealthMemory'],'InitialCondition','health0','SampleTime','P.dt','Position',[1720 1000 1820 1050]);
  else
-  assignin(w,'v1Memory0',tdp.v1TeamMemory());
+  assignin(w,'v1Memory0',tdp.bf2TeamMemory());
   % Draft v1.1 fallback monitor state and last tick's skill phases (inactive
   % unless P.v11Fallback is true; see tdp.v11FallbackConfig).
   assignin(w,'v11Memory0',tdp.v11FallbackMemory());assignin(w,'skill0',zeros(1,8));
@@ -116,6 +116,7 @@ add_block('simulink/Sinks/To Workspace',[n '/Records'],'VariableName','records',
 lines={'WorldMemory/1','Plant2D/1';requestSource,'Plant2D/2';'JoinPlans/1','Plant2D/3';'StepTime/1','Plant2D/4';'Plant2D/1','WorldMemory/1';feedbackSource,'FeedbackMemory/1';'Plant2D/1','Record/1';['Team1' strikerPort],'Record/2';['Team2' strikerPort],'Record/3';'Record/1','Records/1'};
 for k=1:size(lines,1),add_line(n,lines{k,1},lines{k,2},'autorouting','on');end
 if v1,addV1Log(n,teamType,feedbackSource);end
+if v1 && ~recovery,addBf2Log(n,teamType);end
 if v1 && ~recovery,add_line(n,'JoinSkills/1','SkillMemory/1','autorouting','on');end
 if recovery,addRecoveryLog(n,teamType);end
 save_system(n,fullfile(root,'models',[n '.slx']));close_system(n,0);
@@ -208,6 +209,19 @@ wireInputs(n,label,{'Team1/2','Team2/2','KickArbiter/1','JoinPlans/1','JoinReque
 add_block('simulink/Sinks/To Workspace',[n '/TacticsRecords'], ...
     'VariableName','tacticsRecords','SaveFormat','Array','Position',[2020 640 2140 690]);
 add_line(n,[label '/1'],'TacticsRecords/1');
+end
+
+function addBf2Log(n,teamType)
+% B-F3: the B-F2 attack-action state of both teams, one row per tick.
+script=sprintf(['function row=f(blue,red,tSim)\n' ...
+    'row=V1Bf2Record(blue,red,tSim);\nend']);
+label='Bf2Record';
+add_matlab_block([n '/' label],script,[1800 1180 1970 1300], ...
+    {'blue',teamType,'Input';'red',teamType,'Input'});
+wireInputs(n,label,{'Team1/2','Team2/2','StepTime/1'});
+add_block('simulink/Sinks/To Workspace',[n '/Bf2Records'], ...
+    'VariableName','bf2Records','SaveFormat','Array','Position',[2020 1210 2140 1260]);
+add_line(n,[label '/1'],'Bf2Records/1');
 end
 
 function wireInputs(n,label,sources)

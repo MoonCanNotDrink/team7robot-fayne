@@ -7,6 +7,9 @@ function [plans,m,v11] = v1TeamPlans(obs,team,prev,previousRequests,feedback,rec
 % rule runs only when P.v11Fallback is true; otherwise v11 passes through.
 % V1.2 (P.v12Policy present, see tdp.v12TeamConfig): per-team tactical numbers
 % and a Defend interceptor chosen among the allowed field roles.
+% B-F3 (P.bf2Priority(team)>0, 9 inputs, memory from tdp.bf2TeamMemory): the
+% attacking chaser chooses shoot, pass or dribble by tdp.bf2Plan. Without
+% P.bf2Priority, or with a zero priority for the team, nothing here changes.
 first = 1+4*(team-1);
 midfielder = first+2;
 striker = first+3;
@@ -46,8 +49,22 @@ else
         previousRequests,feedback,recovered,t,P);
 end
 
+bfOn = false;
+if nargin==9 && isfield(P,'bf2Priority')
+    bfOn = P.bf2Priority(team)>0;
+    if bfOn && ~isfield(prev,'bfCommit')
+        error('TDP:BF2Memory','B-F2 needs the team memory of tdp.bf2TeamMemory.');
+    end
+end
+if bfOn
+    m = tdp.bf2Reset(m);
+end
+
 if ~obs(first).gameRunning
     m.phase = TdpTeamPhase.Hold;
+    if bfOn
+        m = tdp.bf2Release(m,8);
+    end
     return
 end
 % Default shape is independent of all ball values, including invalid NaNs.
@@ -62,6 +79,9 @@ plans(4) = intent(TdpAction.Goto,[-direction*k.counterDepth direction*P.v1Suppor
 
 if ~m.ballKnown
     m.phase = TdpTeamPhase.Search;
+    if bfOn
+        m = tdp.bf2Release(m,4);
+    end
     if ~m.recovering
         if m.takeover && available(3)
             m.chaser = midfielder;
@@ -121,6 +141,13 @@ else
             m.chaser = midfielder;
         end
     end
+    bfUse = false;
+    bfTarget = [0 0];
+    bfSpeed = 0;
+    if bfOn
+        [m,bfUse,bfTarget,bfSpeed] = tdp.bf2Plan(m,source,team,first,available,ball, ...
+            previousRequests,feedback,health,t,P);
+    end
     if m.chaser~=0
         local = m.chaser-first+1;
         goal = [direction*P.L/2 0];
@@ -131,7 +158,11 @@ else
         if k.intercept && m.phase==TdpTeamPhase.Defend
             speed = k.clearSpeed;
         end
-        plans(local) = intent(TdpAction.Kick,goal,heading,speed,roles(local));
+        if bfUse
+            plans(local) = intent(TdpAction.Kick,bfTarget,heading,bfSpeed,roles(local));
+        else
+            plans(local) = intent(TdpAction.Kick,goal,heading,speed,roles(local));
+        end
     end
 end
 for local = 1:4

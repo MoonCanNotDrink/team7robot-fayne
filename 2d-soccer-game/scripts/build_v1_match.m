@@ -10,7 +10,7 @@ else
     addDataSource(dictionary,'TdpTypes.sldd');
 end
 section=getSection(dictionary,'Design Data');
-state=tdp.v1TeamMemory();
+state=tdp.bf2TeamMemory();   % V1 memory plus the B-F2 attack state
 fields=fieldnames(state);
 elements=Simulink.BusElement.empty;
 for i=1:numel(fields)
