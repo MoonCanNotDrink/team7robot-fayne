@@ -11,6 +11,11 @@ function P = bf2Config(bluePriority,redPriority)
 %     bf2SoftTicks             N ticks of a closed lane before a re-choice (B-F2-05)
 %     bf2CommitTimeout         s without entering Kick before a re-choice  (B-F2-05)
 %     bf2ReceiveTimeout        s after the confirmed kick to receive      (B-F2-06)
+%     bf2PassMaxTurn           rad, largest angle between the directions passer->ball
+%                              and ball->receiver for a receiver to be a candidate.
+%                              Used only to filter receivers at a fresh decision, so
+%                              the passer never has to walk round the ball (changes
+%                              B-F2-02 in part). 90 deg is a trial value, not tuned.
 P = tdp.v12Config();
 P.bf2Priority = [priorityCode(bluePriority) priorityCode(redPriority)];
 P.bf2PassMin = 0.5;
@@ -18,6 +23,7 @@ P.bf2PassMax = 2.0;
 P.bf2SoftTicks = 3;
 P.bf2CommitTimeout = 2.0;
 P.bf2ReceiveTimeout = 3.0;
+P.bf2PassMaxTurn = pi/2;   % 90 deg
 end
 
 function code = priorityCode(name)

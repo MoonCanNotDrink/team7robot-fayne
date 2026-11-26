@@ -18,6 +18,7 @@ verifyEqual(t,[P.bf2PassMin P.bf2PassMax],[0.5 2.0]);
 verifyEqual(t,P.bf2SoftTicks,3);
 verifyEqual(t,P.bf2CommitTimeout,2.0);
 verifyEqual(t,P.bf2ReceiveTimeout,3.0);
+verifyEqual(t,P.bf2PassMaxTurn,pi/2);
 verifyEqual(t,tdp.bf2Config('pass','off').bf2Priority,[2 0]);
 verifyFalse(t,isfield(tdp.v12Config(),'bf2Priority'),'B-F2 is opt-in.');
 verifyError(t,@()tdp.bf2Config('shoot','dribble'),'TDP:BF2Priority');
@@ -29,6 +30,18 @@ bad = P; bad.bf2SoftTicks = 0;
 verifyError(t,@()tdp.validateV1Config(bad),'TDP:BF2Config');
 bad = P; bad.bf2ReceiveTimeout = -1;
 verifyError(t,@()tdp.validateV1Config(bad),'TDP:BF2Config');
+% bf2PassMaxTurn must be a finite real scalar in (0, pi]
+for value = {0,-0.1,pi+0.01,[1 1]}
+    bad = P; bad.bf2PassMaxTurn = value{1};
+    verifyError(t,@()tdp.validateV1Config(bad),'TDP:BF2Config');
+end
+% non-finite values are already refused by the generic check of tdp.validateConfig
+for value = {Inf,NaN}
+    bad = P; bad.bf2PassMaxTurn = value{1};
+    verifyError(t,@()tdp.validateV1Config(bad),'TDP:UnknownParameter');
+end
+ok = P; ok.bf2PassMaxTurn = pi;
+verifyEqual(t,tdp.validateV1Config(ok),ok);
 end
 
 function testOffMeansBaselinePlans(t)
@@ -131,10 +144,18 @@ for k = 1:6
     [~,n] = tdp.v1TeamPlans(o,1,m,q,f,false,P,s,v);
     verifyEqual(t,n.bfPass==3,expect(k),sprintf('distance %.2f',dist(k)));
 end
-% backwards is allowed (no direction limit)
+% No walk round the ball (bf2PassMaxTurn): with the striker behind the ball, a
+% receiver behind it (turn passer->ball->receiver about 163 deg) is not a
+% candidate at a fresh decision ...
 [P,o,q,f,m,s,v] = scenario(P0,1,ball,[ball(1)-1.0 ball(2)+0.3]);
 [~,n] = tdp.v1TeamPlans(o,1,m,q,f,false,P,s,v);
-verifyEqual(t,n.bfPass,3,'A pass backwards is allowed.');
+verifyEqual(t,n.bfPass,0,'A pass that needs a walk round the ball is not chosen.');
+verifyNotEqual(t,n.bfAction,3);
+% ... but the field direction is not limited: from beside the ball (turn about
+% 73 deg) the same receiver, diagonally behind, is a candidate.
+oo = placeBlue(o,1,'own',4,[ball(1) ball(2)-0.4]);
+[~,n] = tdp.v1TeamPlans(oo,1,m,q,f,false,P,s,v);
+verifyEqual(t,n.bfPass,3,'A diagonal pass backwards from beside the ball is allowed.');
 % pressured receiver: an opponent within kickRange of the receiver (in this
 % geometry it also touches the lane end; the pressure rule is explicit anyway)
 [P,o,q,f,m,s,v] = scenario(P0,1,ball,[ball(1) ball(2)+1.2]);
@@ -170,6 +191,31 @@ verifyEqual(t,n.bfPass,2,'The nearer defender wins.');
 oo = placeBlue(o,1,'own',2,[ball(1)+1.5 ball(2)]);
 [~,n] = tdp.v1TeamPlans(oo,1,m,q,f,false,P,s,v);
 verifyEqual(t,n.bfPass,2,'An exact tie goes to the lower role number.');
+end
+
+function testKickOffStandOffDribbles(t)
+% Kick-off stand-off: both strikers at the ball, each midfielder behind its own
+% striker (turn about 150 deg). Without the no-walk-round filter the striker
+% committed to that back pass and walked round the ball into the other striker;
+% with it, the striker dribbles and nothing is committed.
+for team = 1:2
+    P0 = tdp.bf2Config('pass','pass');
+    [P,o,q,f,m,s,v] = scenario(P0,team,[0 0],[-1.0 0.6]);
+    o = placeBlue(o,team,'own',4,[-0.25 0]);
+    o = placeBlue(o,team,'opp',4,[0.25 0]);
+    o = placeBlue(o,team,'opp',3,[1.0 -0.6]);
+    [~,n] = tdp.v1TeamPlans(o,team,m,q,f,false,P,s,v);
+    verifyEqual(t,n.phase,TdpTeamPhase.Attack,sprintf('team %d attacks',team));
+    verifyEqual(t,n.bfAction,1,sprintf('team %d dribbles',team));
+    verifyEqual(t,n.bfCommit,0,sprintf('team %d commits to nothing',team));
+    verifyFalse(t,n.bfShot);
+    verifyEqual(t,n.bfPass,0);
+    % The same frozen world without the turn limit is a feasible back pass, so
+    % the filter is what decides here.
+    P.bf2PassMaxTurn = pi;
+    [~,n] = tdp.v1TeamPlans(o,team,m,q,f,false,P,s,v);
+    verifyEqual(t,n.bfAction,3,sprintf('team %d: without the limit it passes back',team));
+end
 end
 
 % ---- B-F2-05 commitment ---------------------------------------------------------

@@ -12,6 +12,8 @@ function [m,use,target,speed] = bf2Plan(m,source,team,first,available,ball,reque
 %     Neither feasible: dribble toward the goal with P.dribbleSpeed.
 %  02 Receiver: not the goalkeeper, not the passer, available and valid, distance
 %     in [bf2PassMin bf2PassMax], passOpen.open, not pressured; nearest to the ball.
+%     B-F3 addition: at a fresh decision the turn passer->ball->receiver is at
+%     most bf2PassMaxTurn (the passer never walks round the ball).
 %  03 After the passer's Done feedback the chaser role goes to the receiver.
 %  05 Commit to the action type and the receiver ID only. Soft invalidation
 %     (bf2SoftTicks closed ticks) only in Approach/Align. No shoot<->pass swap.
@@ -224,7 +226,8 @@ for local = 2:4
     id = first+local-1;
     if ~receiverUsable(id,first,c,available,valid,m.takeover), continue; end
     po = tdp.passOpen(ball,team,pos,valid,c,id,P,Q);
-    if po.open && ~po.pressured && po.dist>=P.bf2PassMin && po.dist<bestDist
+    if po.open && ~po.pressured && po.dist>=P.bf2PassMin && po.dist<bestDist && ...
+            noWalkAround(pos(c,:),ball,pos(id,:),P)
         best = id;
         bestDist = po.dist;
         bestSpeed = po.speed;
@@ -300,6 +303,20 @@ if lr>=2 && lr<=4 && available(lr) && valid(r)
 else
     m.bfRelease = 6;
 end
+end
+
+function yes = noWalkAround(passer,ball,receiver,P)
+% The passer need not walk round the ball: the angle between passer->ball and
+% ball->receiver is at most P.bf2PassMaxTurn. Used for fresh choices only; a
+% committed pass is not released by it (committedLane does not use it). A passer
+% on the ball (|u| about 0) passes the test.
+yes = true;
+if ~isfield(P,'bf2PassMaxTurn'), return; end
+u = ball(:)'-passer(:)';
+w = receiver(:)'-ball(:)';
+if norm(u)<1e-6 || norm(w)<1e-6, return; end
+cosTurn = max(-1,min(1,dot(u,w)/(norm(u)*norm(w))));
+yes = acos(cosTurn)<=P.bf2PassMaxTurn+1e-12;
 end
 
 function yes = receiverUsable(id,first,chaser,available,valid,takeover)
