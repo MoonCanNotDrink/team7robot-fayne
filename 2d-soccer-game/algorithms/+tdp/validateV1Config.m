@@ -102,6 +102,11 @@ if isfield(P,'bf2Priority')
         assert(isnumeric(turn) && isreal(turn) && isscalar(turn) && isfinite(turn) && ...
             turn>0 && turn<=pi,'TDP:BF2Config','bf2PassMaxTurn must be in (0, pi].');
     end
+    if isfield(P,'bf2ContestRadius')
+        radius=P.bf2ContestRadius;
+        assert(isnumeric(radius) && isreal(radius) && isscalar(radius) && isfinite(radius) && ...
+            radius>0,'TDP:BF2Config','bf2ContestRadius must be a positive scalar.');
+    end
     assert(P.bf2PassMin<P.bf2PassMax,'TDP:BF2Config','bf2PassMin must be below bf2PassMax.');
     count=P.bf2SoftTicks;
     assert(isnumeric(count) && isscalar(count) && count==round(count) && count>=1, ...

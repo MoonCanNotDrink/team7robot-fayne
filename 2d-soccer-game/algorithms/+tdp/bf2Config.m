@@ -16,6 +16,9 @@ function P = bf2Config(bluePriority,redPriority)
 %                              Used only to filter receivers at a fresh decision, so
 %                              the passer never has to walk round the ball (changes
 %                              B-F2-02 in part). 90 deg is a trial value, not tuned.
+%     bf2ContestRadius         m, the turn limit applies only when a visible
+%                              opponent is within this distance of the ball
+%                              (B-F2-09, option a). Trial value, not tuned.
 P = tdp.v12Config();
 P.bf2Priority = [priorityCode(bluePriority) priorityCode(redPriority)];
 P.bf2PassMin = 0.5;
@@ -24,6 +27,7 @@ P.bf2SoftTicks = 3;
 P.bf2CommitTimeout = 2.0;
 P.bf2ReceiveTimeout = 3.0;
 P.bf2PassMaxTurn = pi/2;   % 90 deg
+P.bf2ContestRadius = 0.5;
 end
 
 function code = priorityCode(name)

@@ -12,8 +12,10 @@ function [m,use,target,speed] = bf2Plan(m,source,team,first,available,ball,reque
 %     Neither feasible: dribble toward the goal with P.dribbleSpeed.
 %  02 Receiver: not the goalkeeper, not the passer, available and valid, distance
 %     in [bf2PassMin bf2PassMax], passOpen.open, not pressured; nearest to the ball.
-%     B-F3 addition: at a fresh decision the turn passer->ball->receiver is at
-%     most bf2PassMaxTurn (the passer never walks round the ball).
+%     B-F3 addition (B-F2-09): at a fresh decision, when the ball is contested (a
+%     visible opponent within bf2ContestRadius of it), the turn
+%     passer->ball->receiver is at most bf2PassMaxTurn (the passer never walks
+%     round the ball). Uncontested, any direction is allowed.
 %  03 After the passer's Done feedback the chaser role goes to the receiver.
 %  05 Commit to the action type and the receiver ID only. Soft invalidation
 %     (bf2SoftTicks closed ticks) only in Approach/Align. No shoot<->pass swap.
@@ -219,6 +221,7 @@ if kickNow
 end
 
 S = tdp.shotOpen(ball,team,pos,valid,c,P,Q);
+contested = ballContested(pos,valid,team,ball,P);
 best = 0;
 bestDist = Inf;
 bestSpeed = 0;
@@ -227,7 +230,7 @@ for local = 2:4
     if ~receiverUsable(id,first,c,available,valid,m.takeover), continue; end
     po = tdp.passOpen(ball,team,pos,valid,c,id,P,Q);
     if po.open && ~po.pressured && po.dist>=P.bf2PassMin && po.dist<bestDist && ...
-            noWalkAround(pos(c,:),ball,pos(id,:),P)
+            (~contested || noWalkAround(pos(c,:),ball,pos(id,:),P))
         best = id;
         bestDist = po.dist;
         bestSpeed = po.speed;
@@ -317,6 +320,20 @@ w = receiver(:)'-ball(:)';
 if norm(u)<1e-6 || norm(w)<1e-6, return; end
 cosTurn = max(-1,min(1,dot(u,w)/(norm(u)*norm(w))));
 yes = acos(cosTurn)<=P.bf2PassMaxTurn+1e-12;
+end
+
+function yes = ballContested(pos,valid,team,ball,P)
+% A visible opponent within P.bf2ContestRadius of the ball. Without the field the
+% ball always counts as contested (the turn limit then applies everywhere).
+yes = true;
+if ~isfield(P,'bf2ContestRadius'), return; end
+yes = false;
+opponentFirst = 1+4*(2-team);
+for i = opponentFirst:opponentFirst+3
+    if valid(i) && hypot(pos(i,1)-ball(1),pos(i,2)-ball(2))<=P.bf2ContestRadius+1e-12
+        yes = true;
+    end
+end
 end
 
 function yes = receiverUsable(id,first,chaser,available,valid,takeover)

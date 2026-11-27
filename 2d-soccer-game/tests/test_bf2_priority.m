@@ -19,6 +19,7 @@ verifyEqual(t,P.bf2SoftTicks,3);
 verifyEqual(t,P.bf2CommitTimeout,2.0);
 verifyEqual(t,P.bf2ReceiveTimeout,3.0);
 verifyEqual(t,P.bf2PassMaxTurn,pi/2);
+verifyEqual(t,P.bf2ContestRadius,0.5);
 verifyEqual(t,tdp.bf2Config('pass','off').bf2Priority,[2 0]);
 verifyFalse(t,isfield(tdp.v12Config(),'bf2Priority'),'B-F2 is opt-in.');
 verifyError(t,@()tdp.bf2Config('shoot','dribble'),'TDP:BF2Priority');
@@ -42,6 +43,11 @@ for value = {Inf,NaN}
 end
 ok = P; ok.bf2PassMaxTurn = pi;
 verifyEqual(t,tdp.validateV1Config(ok),ok);
+% bf2ContestRadius must be a positive real scalar
+for value = {0,-0.5,[0.5 0.5]}
+    bad = P; bad.bf2ContestRadius = value{1};
+    verifyError(t,@()tdp.validateV1Config(bad),'TDP:BF2Config');
+end
 end
 
 function testOffMeansBaselinePlans(t)
@@ -144,16 +150,30 @@ for k = 1:6
     [~,n] = tdp.v1TeamPlans(o,1,m,q,f,false,P,s,v);
     verifyEqual(t,n.bfPass==3,expect(k),sprintf('distance %.2f',dist(k)));
 end
-% No walk round the ball (bf2PassMaxTurn): with the striker behind the ball, a
-% receiver behind it (turn passer->ball->receiver about 163 deg) is not a
-% candidate at a fresh decision ...
+% No walk round the ball (bf2PassMaxTurn, B-F2-09), only when the ball is
+% contested. With the striker behind the ball, a receiver behind it (turn
+% passer->ball->receiver about 163 deg) is a candidate while no opponent is near
+% the ball ...
 [P,o,q,f,m,s,v] = scenario(P0,1,ball,[ball(1)-1.0 ball(2)+0.3]);
 [~,n] = tdp.v1TeamPlans(o,1,m,q,f,false,P,s,v);
-verifyEqual(t,n.bfPass,0,'A pass that needs a walk round the ball is not chosen.');
+verifyEqual(t,n.bfPass,3,'Uncontested, a back pass round the ball is allowed.');
+% ... but not once a visible opponent is within bf2ContestRadius of the ball
+% (here 0.40 m, clear of the lane and of the receiver) ...
+contested = placeBlue(o,1,'opp',4,[ball(1)+0.2 ball(2)-0.35]);
+[~,n] = tdp.v1TeamPlans(contested,1,m,q,f,false,P,s,v);
+verifyEqual(t,n.bfPass,0,'Contested, a pass that needs a walk round the ball is not chosen.');
 verifyNotEqual(t,n.bfAction,3);
-% ... but the field direction is not limited: from beside the ball (turn about
-% 73 deg) the same receiver, diagonally behind, is a candidate.
-oo = placeBlue(o,1,'own',4,[ball(1) ball(2)-0.4]);
+% ... the radius is inclusive and an unseen opponent does not count ...
+far = placeBlue(o,1,'opp',4,[ball(1)+0.3 ball(2)-0.41]);   % 0.508 m
+[~,n] = tdp.v1TeamPlans(far,1,m,q,f,false,P,s,v);
+verifyEqual(t,n.bfPass,3,'An opponent just outside the radius does not contest.');
+unseen = contested;
+for i = 1:8, unseen(i).robotValid(8) = false; end
+[~,n] = tdp.v1TeamPlans(unseen,1,m,q,f,false,P,s,v);
+verifyEqual(t,n.bfPass,3,'An unseen opponent does not contest the ball.');
+% ... and the field direction is not limited: from beside the ball (turn about
+% 73 deg) the same receiver, diagonally behind, is a candidate when contested.
+oo = placeBlue(contested,1,'own',4,[ball(1) ball(2)-0.4]);
 [~,n] = tdp.v1TeamPlans(oo,1,m,q,f,false,P,s,v);
 verifyEqual(t,n.bfPass,3,'A diagonal pass backwards from beside the ball is allowed.');
 % pressured receiver: an opponent within kickRange of the receiver (in this
@@ -195,7 +215,8 @@ end
 
 function testKickOffStandOffDribbles(t)
 % Kick-off stand-off: both strikers at the ball, each midfielder behind its own
-% striker (turn about 150 deg). Without the no-walk-round filter the striker
+% striker (turn about 150 deg), the other striker 0.25 m from the ball, so the
+% ball is contested. Without the no-walk-round filter the striker
 % committed to that back pass and walked round the ball into the other striker;
 % with it, the striker dribbles and nothing is committed.
 for team = 1:2
